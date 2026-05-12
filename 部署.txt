@@ -1,0 +1,30 @@
+ # 1. 安装 Docker
+  curl -fsSL https://get.docker.com | sh
+  systemctl enable docker && systemctl start docker
+
+  # 2. 安装 docker-compose
+  apt install docker-compose -y
+
+  # 3. 拉取代码
+  git clone https://github.com/fangyirui/XianyuAutoAgent.git
+  cd XianyuAutoAgent
+
+  # 4. 配置环境变量
+  cp .env.example .env
+  vim .env   # 填入 API_KEY 和 COOKIES_STR
+
+  # 5. 准备自定义提示词（可选，不做则用默认）
+  cp prompts/classify_prompt_example.txt prompts/classify_prompt.txt
+  cp prompts/price_prompt_example.txt prompts/price_prompt.txt
+  cp prompts/tech_prompt_example.txt prompts/tech_prompt.txt
+  cp prompts/default_prompt_example.txt prompts/default_prompt.txt
+
+  # 6. 启动
+  docker compose up -d
+  或者
+  docker compose restart
+
+  docker compose up -d --build
+
+  # 7. 查看日志
+  docker logs -f xianyuautoagent
