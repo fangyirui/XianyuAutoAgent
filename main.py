@@ -63,8 +63,11 @@ class XianyuLive:
         try:
             logger.info("开始刷新token...")
             
-            # 获取新token（如果Cookie失效，get_token会直接退出程序）
+            # 获取新token（Cookie失效时返回None）
             token_result = self.xianyu.get_token(self.device_id)
+            if not token_result:
+                logger.error("Cookie已失效，请通过 Web 管理页面更新 Cookie 后重启服务")
+                return None
             if 'data' in token_result and 'accessToken' in token_result['data']:
                 new_token = token_result['data']['accessToken']
                 self.current_token = new_token
@@ -720,30 +723,28 @@ def check_and_complete_env():
     
     for key, placeholder in critical_vars.items():
         curr_val = os.getenv(key)
-        
+
         # 如果变量未设置，或者值等于占位符
         if not curr_val or curr_val == placeholder:
-            logger.warning(f"配置项 [{key}] 未设置或为默认值，请输入")
-            while True:
-                val = input(f"请输入 {key}: ").strip()
-                if val:
-                    # 更新当前环境
-                    os.environ[key] = val
-                    
-                    # 尝试持久化到 .env
-                    try:
-                        # 如果没有.env文件，先创建
-                        if not os.path.exists(env_path):
-                            with open(env_path, 'w', encoding='utf-8') as f:
-                                pass # Create empty file
-                        
-                        set_key(env_path, key, val)
-                        updated = True
-                    except Exception as e:
-                        logger.warning(f"无法自动写入.env文件，请手动保存: {e}")
-                    break
-                else:
-                    print(f"{key} 不能为空，请重新输入")
+            if sys.stdin.isatty():
+                logger.warning(f"配置项 [{key}] 未设置或为默认值，请输入")
+                while True:
+                    val = input(f"请输入 {key}: ").strip()
+                    if val:
+                        os.environ[key] = val
+                        try:
+                            if not os.path.exists(env_path):
+                                with open(env_path, 'w', encoding='utf-8') as f:
+                                    pass
+                            set_key(env_path, key, val)
+                            updated = True
+                        except Exception as e:
+                            logger.warning(f"无法自动写入.env文件，请手动保存: {e}")
+                        break
+                    else:
+                        print(f"{key} 不能为空，请重新输入")
+            else:
+                logger.warning(f"配置项 [{key}] 未设置或为默认值，请通过 Web 管理页面配置后重启")
     
     if updated:
         logger.info("新的配置已保存/更新至 .env 文件中")
@@ -752,7 +753,7 @@ def check_and_complete_env():
 if __name__ == '__main__':
     # 加载环境变量
     if os.path.exists(".env"):
-        load_dotenv()
+        load_dotenv(override=True)
         logger.info("已加载 .env 配置")
     
     if os.path.exists(".env.example"):
@@ -777,12 +778,14 @@ if __name__ == '__main__':
     
     cookies_str = os.getenv("COOKIES_STR")
     bot = XianyuReplyBot()
-    xianyuLive = XianyuLive(cookies_str)
 
     async def run_all():
-        await asyncio.gather(
-            xianyuLive.main(),
-            start_web_server(port=int(os.getenv("LOG_SERVER_PORT", "9966"))),
-        )
+        tasks = [start_web_server(port=int(os.getenv("LOG_SERVER_PORT", "9966")))]
+        try:
+            xianyuLive = XianyuLive(cookies_str)
+            tasks.append(xianyuLive.main())
+        except Exception as e:
+            logger.error(f"初始化失败: {e}，请通过 Web 管理页面 (http://localhost:9966) 配置正确的 Cookie 后重启")
+        await asyncio.gather(*tasks)
 
     asyncio.run(run_all())
