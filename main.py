@@ -14,6 +14,7 @@ import random
 from utils.xianyu_utils import generate_mid, generate_uuid, trans_cookies, generate_device_id, decrypt
 from XianyuAgent import XianyuReplyBot
 from context_manager import ChatContextManager
+from log_server import start_web_server, log_sink
 
 
 class XianyuLive:
@@ -767,6 +768,9 @@ if __name__ == '__main__':
         format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
     )
     logger.info(f"日志级别设置为: {log_level}")
+
+    # 添加 WebSocket 日志推送
+    logger.add(log_sink, format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}", level=log_level)
     
     # 交互式检查并补全配置
     check_and_complete_env()
@@ -774,5 +778,11 @@ if __name__ == '__main__':
     cookies_str = os.getenv("COOKIES_STR")
     bot = XianyuReplyBot()
     xianyuLive = XianyuLive(cookies_str)
-    # 常驻进程
-    asyncio.run(xianyuLive.main())
+
+    async def run_all():
+        await asyncio.gather(
+            xianyuLive.main(),
+            start_web_server(port=int(os.getenv("LOG_SERVER_PORT", "9966"))),
+        )
+
+    asyncio.run(run_all())
