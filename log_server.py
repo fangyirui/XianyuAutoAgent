@@ -788,25 +788,32 @@ def create_app():
 
     @app.get("/api/prompts")
     async def get_prompts():
-        import json as _json
-        prompts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "prompt.json")
-        try:
-            with open(prompts_path, "r", encoding="utf-8") as f:
-                data = _json.load(f)
-            return JSONResponse(data)
-        except Exception:
-            return JSONResponse({"classify": "", "default": "", "price": "", "tech": ""})
+        prompts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
+        result = {}
+        name_map = {"classify": "classify_prompt", "default": "default_prompt", "price": "price_prompt", "tech": "tech_prompt"}
+        for key, filename in name_map.items():
+            txt_path = os.path.join(prompts_dir, f"{filename}.txt")
+            example_path = os.path.join(prompts_dir, f"{filename}_example.txt")
+            path = txt_path if os.path.exists(txt_path) else example_path
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    result[key] = f.read()
+            except Exception:
+                result[key] = ""
+        return JSONResponse(result)
 
     @app.post("/api/prompts")
     async def save_prompts(request: Request):
-        import json as _json
         body = await request.json()
-        prompts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "prompt.json")
-        allowed = {"classify", "default", "price", "tech"}
-        data = {k: body.get(k, "") for k in allowed}
+        prompts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
+        name_map = {"classify": "classify_prompt", "default": "default_prompt", "price": "price_prompt", "tech": "tech_prompt"}
         try:
-            with open(prompts_path, "w", encoding="utf-8") as f:
-                _json.dump(data, f, ensure_ascii=False, indent=2)
+            for key, filename in name_map.items():
+                content = body.get(key, "")
+                if content:
+                    txt_path = os.path.join(prompts_dir, f"{filename}.txt")
+                    with open(txt_path, "w", encoding="utf-8") as f:
+                        f.write(content)
             return JSONResponse({"message": "提示词已保存"})
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
