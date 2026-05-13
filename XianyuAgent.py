@@ -63,6 +63,8 @@ class XianyuReplyBot:
 
     def _safe_filter(self, text: str) -> str:
         """安全过滤模块"""
+        if not text:
+            return "-"
         blocked_phrases = ["微信", "QQ", "支付宝", "银行卡", "线下"]
         return "[安全提醒]请通过平台沟通" if any(p in text for p in blocked_phrases) else text
 
@@ -228,7 +230,7 @@ class BaseAgent:
             max_tokens=500,
             top_p=0.8
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content or ""
 
 
 class PriceAgent(BaseAgent):

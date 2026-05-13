@@ -225,6 +225,49 @@ class XianyuApis:
             time.sleep(0.5)
             return self.get_token(device_id, retry_count + 1)
 
+    def qr_generate(self):
+        """生成扫码登录二维码"""
+        url = 'https://passport.goofish.com/newlogin/qrcode/generate.do'
+        params = {'appName': 'xianyu', 'fromSite': '77'}
+        data = {
+            'appName': 'xianyu',
+            'appEntrance': 'web',
+            'isMobile': 'false',
+            'lang': 'zh_CN',
+            'returnUrl': 'https://www.goofish.com/',
+            'fromSite': '77',
+            'bizParams': '',
+            'mainPage': 'false',
+            'isIframe': 'true',
+            'documentReferer': 'https://www.goofish.com/',
+            'defaultView': 'qrcode',
+            'umidTag': 'SERVER'
+        }
+        response = self.session.post(url, params=params, data=data)
+        return response.json()
+
+    def qr_query(self, t):
+        """查询二维码扫码状态，返回 (json响应, cookies)"""
+        url = 'https://passport.goofish.com/newlogin/qrcode/query.do'
+        params = {'appName': 'xianyu', 'fromSite': '77'}
+        data = {
+            't': t,
+            'appName': 'xianyu',
+            'appEntrance': 'web',
+            'isMobile': 'false',
+            'lang': 'zh_CN',
+            'returnUrl': 'https://www.goofish.com/',
+            'fromSite': '77',
+            'bizParams': '',
+            'mainPage': 'false',
+            'isIframe': 'true',
+            'documentReferer': 'https://www.goofish.com/',
+            'defaultView': 'qrcode',
+            'umidTag': 'SERVER'
+        }
+        response = self.session.post(url, params=params, data=data)
+        return response.json(), response.cookies
+
     def get_item_info(self, item_id, retry_count=0):
         """获取商品信息，自动处理token失效的情况"""
         if retry_count >= 3:  # 最多重试3次
