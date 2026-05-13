@@ -775,17 +775,26 @@ if __name__ == '__main__':
     
     # 交互式检查并补全配置
     check_and_complete_env()
-    
+
     cookies_str = os.getenv("COOKIES_STR")
-    bot = XianyuReplyBot()
+
+    # 尝试初始化 bot，缺少 API_KEY 时仍启动 Web 服务供用户配置
+    bot = None
+    try:
+        bot = XianyuReplyBot()
+    except Exception as e:
+        logger.warning(f"Bot 初始化失败: {e}，请通过 Web 管理页面 (http://localhost:9966) 配置后重启")
 
     async def run_all():
         tasks = [start_web_server(port=int(os.getenv("LOG_SERVER_PORT", "9966")))]
-        try:
-            xianyuLive = XianyuLive(cookies_str)
-            tasks.append(xianyuLive.main())
-        except Exception as e:
-            logger.error(f"初始化失败: {e}，请通过 Web 管理页面 (http://localhost:9966) 配置正确的 Cookie 后重启")
+        if bot and cookies_str:
+            try:
+                xianyuLive = XianyuLive(cookies_str)
+                tasks.append(xianyuLive.main())
+            except Exception as e:
+                logger.error(f"初始化失败: {e}，请通过 Web 管理页面 (http://localhost:9966) 配置正确的 Cookie 后重启")
+        else:
+            logger.warning("配置不完整，仅启动 Web 管理页面。请访问 http://localhost:9966 完成配置后重启")
         await asyncio.gather(*tasks)
 
     asyncio.run(run_all())
