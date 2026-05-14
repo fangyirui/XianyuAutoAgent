@@ -1,0 +1,11 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+pydantic-settings==2.2.1
+sqlalchemy[asyncio]==2.0.29
+asyncmy==0.2.9
+redis==5.0.3
+openai==1.65.5
+websockets==13.1
+aiohttp==3.9.3
+python-dotenv==1.0.1
+loguru==0.7.3
