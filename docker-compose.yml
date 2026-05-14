@@ -1,21 +1,81 @@
-version: '3'
+version: "3.8"
 
 services:
-    xianyu-auto-agent:
-        build: .
-        container_name: xianyuautoagent
-        restart: always
-        ports:
-            - "9966:9966"
-        volumes:
-            - ./data:/app/data
-            - ./prompts:/app/prompts
-            - ./.env:/app/.env
-        environment:
-            - TZ=Asia/Shanghai
-        networks:
-            - xianyu-network
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-xianyu_root_123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-xianyu}
+      MYSQL_USER: ${MYSQL_USER:-xianyu}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-xianyu_pass_123}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:-xianyu_redis_123}
+    ports:
+      - "6379:6379"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-xianyu_redis_123}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend-web:
+    build: ./backend-web
+    ports:
+      - "8089:8089"
+    env_file: .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./common:/app/common
+    networks:
+      - internal
+
+  websocket:
+    build: ./websocket
+    ports:
+      - "8090:8090"
+    env_file: .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./common:/app/common
+      - ./websocket/prompts:/app/prompts
+    networks:
+      - internal
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend-web
+    networks:
+      - internal
 
 networks:
-    xianyu-network:
-        driver: bridge
+  internal:
+
+volumes:
+  mysql_data:
