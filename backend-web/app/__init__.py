@@ -1,9 +1,19 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from common.db import engine
+    from common.models import Base
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="XianyuAutoAgent API", version="2.0.0")
+    app = FastAPI(title="XianyuAutoAgent API", version="2.0.0", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
