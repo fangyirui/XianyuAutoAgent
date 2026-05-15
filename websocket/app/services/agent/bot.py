@@ -1,4 +1,5 @@
 import re
+import json
 from typing import List, Dict
 from pathlib import Path
 from openai import AsyncOpenAI
@@ -38,13 +39,53 @@ class XianyuReplyBot:
             if target.exists():
                 return target.read_text(encoding="utf-8")
             fallback = prompt_dir / f"{name}_example.txt"
-            return fallback.read_text(encoding="utf-8")
+            if fallback.exists():
+                return fallback.read_text(encoding="utf-8")
+            return ""
+
+        # Try prompt.json first (has all 4 prompts in one file)
+        prompt_json = prompt_dir / "prompt.json"
+        if prompt_json.exists():
+            try:
+                data = json.loads(prompt_json.read_text(encoding="utf-8"))
+                self.classify_prompt = data.get("classify", "")
+                self.price_prompt = data.get("price", "")
+                self.tech_prompt = data.get("tech", "")
+                self.default_prompt = data.get("default", "")
+                logger.info("从 prompt.json 加载提示词")
+                return
+            except Exception:
+                pass
 
         self.classify_prompt = load_prompt("classify_prompt")
         self.price_prompt = load_prompt("price_prompt")
         self.tech_prompt = load_prompt("tech_prompt")
         self.default_prompt = load_prompt("default_prompt")
-        logger.info("成功加载所有提示词")
+        logger.info("从文件加载提示词")
+
+    async def load_prompts_from_db(self):
+        from common.db import AsyncSessionLocal
+        from sqlalchemy import select
+        from common.models import SystemConfig
+
+        prompt_keys = ["prompt:classify_prompt", "prompt:price_prompt", "prompt:tech_prompt", "prompt:default_prompt"]
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(SystemConfig).where(SystemConfig.key_name.in_(prompt_keys)))
+            db_prompts = {r.key_name: r.value for r in result.scalars()}
+
+        if db_prompts.get("prompt:classify_prompt"):
+            self.classify_prompt = db_prompts["prompt:classify_prompt"]
+        if db_prompts.get("prompt:price_prompt"):
+            self.price_prompt = db_prompts["prompt:price_prompt"]
+        if db_prompts.get("prompt:tech_prompt"):
+            self.tech_prompt = db_prompts["prompt:tech_prompt"]
+        if db_prompts.get("prompt:default_prompt"):
+            self.default_prompt = db_prompts["prompt:default_prompt"]
+
+        if any(db_prompts.values()):
+            self._init_agents()
+            self.router = IntentRouter(self.agents["classify"])
+            logger.info("从数据库加载提示词")
 
     def _safe_filter(self, text: str) -> str:
         if not text:

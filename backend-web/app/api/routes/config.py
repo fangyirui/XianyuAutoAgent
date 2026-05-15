@@ -12,8 +12,6 @@ from typing import List, Optional
 
 router = APIRouter(prefix="/config", tags=["config"], dependencies=[Depends(get_current_user)])
 
-PROMPTS_DIR = Path(__file__).parent.parent.parent.parent.parent / "websocket" / "prompts"
-
 
 def _mask(value: str) -> str:
     if not value:
@@ -53,13 +51,20 @@ async def get_env_config(db: AsyncSession = Depends(get_db)):
         API_KEY=_mask(db_values.get("API_KEY") or settings.API_KEY),
         MODEL_BASE_URL=db_values.get("MODEL_BASE_URL") or settings.MODEL_BASE_URL,
         MODEL_NAME=db_values.get("MODEL_NAME") or settings.MODEL_NAME,
-        COOKIES_STR=_mask(db_values.get("COOKIES_STR") or settings.COOKIES_STR),
+        COOKIES_STR=db_values.get("COOKIES_STR") or settings.COOKIES_STR,
     )
 
 
 @router.put("/env")
 async def update_env_config(body: EnvConfigUpdate, db: AsyncSession = Depends(get_db)):
-    updates = {k: v for k, v in body.model_dump().items() if v is not None and "***" not in v}
+    raw = body.model_dump()
+    updates = {}
+    for k, v in raw.items():
+        if v is None:
+            continue
+        if k == "API_KEY" and "***" in v:
+            continue
+        updates[k] = v
     for key, value in updates.items():
         result = await db.execute(select(SystemConfig).where(SystemConfig.key_name == key))
         row = result.scalar_one_or_none()
@@ -98,20 +103,48 @@ async def test_ai_connection(body: AiTestRequest, db: AsyncSession = Depends(get
         return {"success": False, "error": str(e)}
 
 
+PROMPT_NAMES = ["classify_prompt", "price_prompt", "tech_prompt", "default_prompt"]
+PROMPT_JSON_PATH = Path(__file__).parent.parent.parent.parent.parent / "websocket" / "prompts" / "prompt.json"
+PROMPT_KEY_MAP = {"classify_prompt": "classify", "price_prompt": "price", "tech_prompt": "tech", "default_prompt": "default"}
+
+
+async def _load_default_prompts() -> dict:
+    import json
+    if PROMPT_JSON_PATH.exists():
+        data = json.loads(PROMPT_JSON_PATH.read_text(encoding="utf-8"))
+        return {f"{k}_prompt": v for k, v in data.items() if f"{k}_prompt" in PROMPT_NAMES}
+    return {}
+
+
 @router.get("/prompts", response_model=List[dict])
-async def list_prompts():
-    prompts = []
-    if PROMPTS_DIR.exists():
-        for f in sorted(PROMPTS_DIR.glob("*.txt")):
-            prompts.append({"name": f.stem, "content": f.read_text(encoding="utf-8")})
-    return prompts
+async def list_prompts(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(SystemConfig).where(SystemConfig.key_name.in_([f"prompt:{n}" for n in PROMPT_NAMES]))
+    )
+    db_prompts = {r.key_name.replace("prompt:", ""): r.value for r in result.scalars()}
+
+    if len(db_prompts) < len(PROMPT_NAMES):
+        defaults = await _load_default_prompts()
+        for name in PROMPT_NAMES:
+            if name not in db_prompts:
+                db_prompts[name] = defaults.get(name, "")
+
+    return [{"name": n, "content": db_prompts.get(n, "")} for n in PROMPT_NAMES]
 
 
 @router.put("/prompts")
-async def update_prompt(body: PromptUpdate):
-    PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = PROMPTS_DIR / f"{body.name}.txt"
-    path.write_text(body.content, encoding="utf-8")
+async def update_prompt(body: PromptUpdate, db: AsyncSession = Depends(get_db)):
+    key = f"prompt:{body.name}"
+    result = await db.execute(select(SystemConfig).where(SystemConfig.key_name == key))
+    row = result.scalar_one_or_none()
+    if row:
+        row.value = body.content
+    else:
+        db.add(SystemConfig(key_name=key, value=body.content))
+    await db.commit()
+
+    r = await get_redis()
+    await r.publish("config:reload", "prompt_updated")
     return {"status": "ok"}
 
 

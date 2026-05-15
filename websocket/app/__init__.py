@@ -23,6 +23,7 @@ async def _start_live(app_state=None):
     from .api.routes.control import set_live_instance as set_control
 
     _live_instance = XianyuLive()
+    await _live_instance.bot.load_prompts_from_db()
     set_health(_live_instance)
     set_control(_live_instance)
     _live_task = asyncio.create_task(_live_instance.run())
