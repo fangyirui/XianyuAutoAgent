@@ -5,6 +5,7 @@ interface Conversation {
   id: number
   chat_id: string
   user_id: string
+  user_nickname: string | null
   item_id: string | null
   item_title: string | null
   item_price: number | null
@@ -52,7 +53,7 @@ export default function LogsPage() {
                   <span className="text-xs text-emerald-400 shrink-0">¥{c.item_price}</span>
                 )}
               </div>
-              <p className="text-xs text-gray-400 mt-0.5 truncate">买家: {c.user_id}</p>
+              <p className="text-xs text-gray-400 mt-0.5 truncate">买家: {c.user_nickname || c.user_id}</p>
               {c.last_message && (
                 <p className="text-xs text-gray-500 mt-1 truncate">{c.last_message}</p>
               )}
@@ -73,7 +74,7 @@ export default function LogsPage() {
           {selectedConv && (
             <div className="pb-3 mb-3 border-b border-gray-700 shrink-0">
               <p className="text-sm font-medium">{selectedConv.item_title || '未知商品'}{selectedConv.item_price ? ` · ¥${selectedConv.item_price}` : ''}</p>
-              <p className="text-xs text-gray-400">买家 {selectedConv.user_id} · 商品 {selectedConv.item_id}</p>
+              <p className="text-xs text-gray-400">买家 {selectedConv.user_nickname || selectedConv.user_id} · 商品 {selectedConv.item_id}</p>
             </div>
           )}
           <div className="flex-1 overflow-auto space-y-3">

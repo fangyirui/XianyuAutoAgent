@@ -16,6 +16,7 @@ class ConversationListItem(BaseModel):
     id: int
     chat_id: str
     user_id: str
+    user_nickname: Optional[str] = None
     item_id: Optional[str] = None
     item_title: Optional[str] = None
     item_price: Optional[float] = None
@@ -89,6 +90,7 @@ async def list_conversations(
             id=c.id,
             chat_id=c.chat_id,
             user_id=c.user_id,
+            user_nickname=c.user_nickname,
             item_id=c.item_id,
             item_title=item.title if item else None,
             item_price=float(item.price) if item and item.price else None,

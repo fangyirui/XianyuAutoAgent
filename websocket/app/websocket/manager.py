@@ -73,13 +73,17 @@ class XianyuLive:
         self.manual_mode_timestamps[chat_id] = time.time()
         return "manual"
 
-    async def _get_or_create_conversation(self, chat_id: str, user_id: str, item_id: str):
+    async def _get_or_create_conversation(self, chat_id: str, user_id: str, item_id: str, user_nickname: str = None):
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(Conversation).where(Conversation.chat_id == chat_id))
             conv = result.scalar_one_or_none()
             if not conv:
-                conv = Conversation(chat_id=chat_id, user_id=user_id, item_id=item_id)
+                conv = Conversation(chat_id=chat_id, user_id=user_id, item_id=item_id, user_nickname=user_nickname)
                 db.add(conv)
+                await db.commit()
+                await db.refresh(conv)
+            elif user_nickname and not conv.user_nickname:
+                conv.user_nickname = user_nickname
                 await db.commit()
                 await db.refresh(conv)
             return conv
@@ -194,6 +198,7 @@ class XianyuLive:
         send_user_id = message["1"]["10"]["senderUserId"]
         send_message = message["1"]["10"]["reminderContent"]
         url_info = message["1"]["10"]["reminderUrl"]
+        sender_nickname = message["1"]["10"].get("reminderTitle") or message["1"]["10"].get("senderNick") or ""
         item_id = url_info.split("itemId=")[1].split("&")[0] if "itemId=" in url_info else None
         chat_id = message["1"]["2"].split("@")[0]
 
@@ -214,7 +219,7 @@ class XianyuLive:
         logger.info(f"收到用户消息 | 会话: {chat_id}, 用户: {send_user_id}, 商品: {item_id}, 内容: {send_message}")
 
         if self.is_manual_mode(chat_id):
-            conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id)
+            conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
             await self._add_message(conv.id, "user", send_message)
             logger.info(f"人工接管中，仅记录 | chat_id={chat_id}")
             return
@@ -243,7 +248,7 @@ class XianyuLive:
             logger.debug(f"商品不属于当前卖家，跳过AI回复 | item_id={item_id}, owner={item_owner}, myid={self.myid}")
             return
 
-        conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id)
+        conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
         context = await self._get_context(conv.id)
         item_desc = f"当前商品的信息如下：{self.build_item_description(item_info)}"
         logger.info(f"开始生成AI回复 | chat_id={chat_id}, 上下文条数={len(context)}")

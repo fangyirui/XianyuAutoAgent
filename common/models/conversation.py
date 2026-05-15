@@ -8,6 +8,7 @@ class Conversation(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     chat_id = Column(String(64), unique=True, nullable=False, index=True)
     user_id = Column(String(64), nullable=False, index=True)
+    user_nickname = Column(String(128), nullable=True, comment="买家昵称")
     item_id = Column(String(64), index=True)
     manual_mode = Column(Boolean, default=False)
     manual_mode_at = Column(DateTime, nullable=True)

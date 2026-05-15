@@ -23,13 +23,10 @@ async def list_items(
     query = select(ItemCache)
     count_query = select(func.count(ItemCache.id))
 
-    # 只显示属于当前卖家的商品
+    # 只显示属于当前卖家的商品；如果没有配置卖家则显示全部
     if seller_ids:
         query = query.where(ItemCache.seller_id.in_(seller_ids))
         count_query = count_query.where(ItemCache.seller_id.in_(seller_ids))
-    else:
-        query = query.where(ItemCache.seller_id.isnot(None))
-        count_query = count_query.where(ItemCache.seller_id.isnot(None))
 
     if keyword:
         query = query.where(ItemCache.title.contains(keyword))

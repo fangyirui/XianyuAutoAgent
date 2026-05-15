@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     chat_id VARCHAR(64) UNIQUE NOT NULL,
     user_id VARCHAR(64) NOT NULL,
+    user_nickname VARCHAR(128) COMMENT '买家昵称',
     item_id VARCHAR(64),
     manual_mode BOOLEAN DEFAULT FALSE,
     manual_mode_at DATETIME,
