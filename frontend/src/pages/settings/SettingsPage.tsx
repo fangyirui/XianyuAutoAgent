@@ -15,6 +15,7 @@ export default function SettingsPage() {
   const [promptEditing, setPromptEditing] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
+  const [msgType, setMsgType] = useState<'success' | 'error'>('success')
   const [showQr, setShowQr] = useState(false)
   const [aiTesting, setAiTesting] = useState(false)
 
@@ -26,7 +27,9 @@ export default function SettingsPage() {
     })
   }, [])
 
-  const showMsg = (msg: string) => { setMessage(msg); setTimeout(() => setMessage(''), 3000) }
+  const showMsg = (msg: string, type: 'success' | 'error' = 'success') => {
+    setMessage(msg); setMsgType(type); setTimeout(() => setMessage(''), type === 'error' ? 8000 : 5000)
+  }
 
   const handleSaveCookie = async () => {
     setSaving(true)
@@ -50,7 +53,7 @@ export default function SettingsPage() {
     setAiTesting(true)
     const res = await testAiConnection({ api_key: env.API_KEY, base_url: env.MODEL_BASE_URL, model: env.MODEL_NAME })
     if (res.success) showMsg(`连接成功: ${res.reply}`)
-    else showMsg(`连接失败: ${res.error}`)
+    else showMsg(`连接失败: ${res.error}`, 'error')
     setAiTesting(false)
   }
 
@@ -72,7 +75,7 @@ export default function SettingsPage() {
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-semibold">设置</h2>
-      {message && <div className="px-4 py-2 bg-emerald-900/50 text-emerald-300 rounded-lg text-sm">{message}</div>}
+      {message && <div className={`px-4 py-2 rounded-lg text-sm ${msgType === 'error' ? 'bg-red-900/50 text-red-300' : 'bg-emerald-900/50 text-emerald-300'}`}>{message}</div>}
 
       <div className="flex gap-2 border-b border-gray-700 pb-2">
         {tabs.map((t) => (

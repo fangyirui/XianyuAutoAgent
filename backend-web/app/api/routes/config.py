@@ -59,7 +59,7 @@ async def get_env_config(db: AsyncSession = Depends(get_db)):
 
 @router.put("/env")
 async def update_env_config(body: EnvConfigUpdate, db: AsyncSession = Depends(get_db)):
-    updates = {k: v for k, v in body.model_dump().items() if v is not None and not v.endswith("***")}
+    updates = {k: v for k, v in body.model_dump().items() if v is not None and "***" not in v}
     for key, value in updates.items():
         result = await db.execute(select(SystemConfig).where(SystemConfig.key_name == key))
         row = result.scalar_one_or_none()
@@ -77,7 +77,7 @@ async def update_env_config(body: EnvConfigUpdate, db: AsyncSession = Depends(ge
 @router.post("/ai-test")
 async def test_ai_connection(body: AiTestRequest, db: AsyncSession = Depends(get_db)):
     api_key = body.api_key
-    if api_key.endswith("***"):
+    if "***" in api_key:
         result = await db.execute(select(SystemConfig).where(SystemConfig.key_name == "API_KEY"))
         row = result.scalar_one_or_none()
         api_key = row.value if row and row.value else settings.API_KEY
