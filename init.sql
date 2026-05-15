@@ -26,12 +26,14 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS item_cache (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     item_id VARCHAR(64) UNIQUE NOT NULL,
+    seller_id VARCHAR(64) COMMENT '商品所属卖家ID',
     title VARCHAR(256),
     price DECIMAL(10,2),
     description TEXT,
     raw_json JSON,
     fetched_at DATETIME DEFAULT NOW(),
-    expired_at DATETIME
+    expired_at DATETIME,
+    INDEX idx_item_cache_seller_id (seller_id)
 );
 
 CREATE TABLE IF NOT EXISTS system_config (

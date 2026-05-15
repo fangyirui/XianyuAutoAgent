@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
 from common.db import get_db
-from common.models import ItemCache
+from common.models import ItemCache, Seller
 from app.api.deps import get_current_user
 from typing import List, Optional
 
@@ -16,8 +16,20 @@ async def list_items(
     keyword: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
+    # 获取当前活跃卖家ID列表
+    seller_result = await db.execute(select(Seller.user_id).where(Seller.is_active.is_(True)))
+    seller_ids = [r[0] for r in seller_result.all()]
+
     query = select(ItemCache)
     count_query = select(func.count(ItemCache.id))
+
+    # 只显示属于当前卖家的商品
+    if seller_ids:
+        query = query.where(ItemCache.seller_id.in_(seller_ids))
+        count_query = count_query.where(ItemCache.seller_id.in_(seller_ids))
+    else:
+        query = query.where(ItemCache.seller_id.isnot(None))
+        count_query = count_query.where(ItemCache.seller_id.isnot(None))
 
     if keyword:
         query = query.where(ItemCache.title.contains(keyword))

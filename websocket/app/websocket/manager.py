@@ -108,16 +108,21 @@ class XianyuLive:
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(ItemCache).where(ItemCache.item_id == item_id))
             row = result.scalar_one_or_none()
+            seller_id = str(data.get("userId", "") or data.get("sellerId", "") or data.get("user_id", ""))
             if row:
                 row.raw_json = data
                 row.title = data.get("title", "")
                 row.price = float(data.get("soldPrice", 0))
+                row.description = data.get("desc", "")
+                if seller_id:
+                    row.seller_id = seller_id
             else:
                 db.add(ItemCache(
                     item_id=item_id, raw_json=data,
                     title=data.get("title", ""),
                     price=float(data.get("soldPrice", 0)),
                     description=data.get("desc", ""),
+                    seller_id=seller_id or None,
                 ))
             await db.commit()
 

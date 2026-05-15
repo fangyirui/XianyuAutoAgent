@@ -7,6 +7,7 @@ class ItemCache(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     item_id = Column(String(64), unique=True, nullable=False)
+    seller_id = Column(String(64), nullable=True, index=True, comment="商品所属卖家ID")
     title = Column(String(256), nullable=True)
     price = Column(Numeric(10, 2), nullable=True)
     description = Column(Text, nullable=True)
