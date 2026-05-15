@@ -123,11 +123,16 @@ async def list_prompts(db: AsyncSession = Depends(get_db)):
     )
     db_prompts = {r.key_name.replace("prompt:", ""): r.value for r in result.scalars()}
 
-    if len(db_prompts) < len(PROMPT_NAMES):
+    # 如果DB中缺少提示词，从文件加载默认值并写入DB
+    missing = [n for n in PROMPT_NAMES if n not in db_prompts or not db_prompts[n]]
+    if missing:
         defaults = await _load_default_prompts()
-        for name in PROMPT_NAMES:
-            if name not in db_prompts:
-                db_prompts[name] = defaults.get(name, "")
+        for name in missing:
+            value = defaults.get(name, "")
+            if value:
+                db.add(SystemConfig(key_name=f"prompt:{name}", value=value))
+                db_prompts[name] = value
+        await db.commit()
 
     return [{"name": n, "content": db_prompts.get(n, "")} for n in PROMPT_NAMES]
 

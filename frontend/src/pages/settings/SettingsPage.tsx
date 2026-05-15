@@ -6,6 +6,13 @@ type Tab = 'cookie' | 'ai' | 'prompts'
 interface Prompt { name: string; content: string }
 interface EnvConfig { API_KEY: string; MODEL_BASE_URL: string; MODEL_NAME: string; COOKIES_STR: string }
 
+const PROMPT_LABELS: Record<string, string> = {
+  classify_prompt: '意图分类',
+  price_prompt: '议价策略',
+  tech_prompt: '技术支持',
+  default_prompt: '通用回复',
+}
+
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('cookie')
   const [env, setEnv] = useState<EnvConfig>({ API_KEY: '', MODEL_BASE_URL: '', MODEL_NAME: '', COOKIES_STR: '' })
@@ -142,7 +149,7 @@ export default function SettingsPage() {
             {prompts.map((p) => (
               <button key={p.name} onClick={() => { setSelectedPrompt(p); setPromptEditing(p.content) }}
                 className={`w-full text-left px-3 py-2 rounded-lg text-sm ${selectedPrompt?.name === p.name ? 'bg-gray-700 text-emerald-400' : 'text-gray-300 hover:bg-gray-700/50'}`}>
-                {p.name}
+                {PROMPT_LABELS[p.name] || p.name}
               </button>
             ))}
           </div>

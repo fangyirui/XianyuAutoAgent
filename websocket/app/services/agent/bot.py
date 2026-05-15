@@ -32,6 +32,13 @@ class XianyuReplyBot:
         }
 
     def _init_system_prompts(self):
+        self.classify_prompt = ""
+        self.price_prompt = ""
+        self.tech_prompt = ""
+        self.default_prompt = ""
+
+    def _load_file_prompts(self) -> dict:
+        """从本地文件加载提示词作为默认值（仅用于DB初始化种子）"""
         prompt_dir = Path(__file__).parent.parent.parent.parent / "prompts"
 
         def load_prompt(name: str) -> str:
@@ -43,29 +50,25 @@ class XianyuReplyBot:
                 return fallback.read_text(encoding="utf-8")
             return ""
 
-        # Try prompt.json first (has all 4 prompts in one file)
         prompt_json = prompt_dir / "prompt.json"
         if prompt_json.exists():
             try:
                 data = json.loads(prompt_json.read_text(encoding="utf-8"))
-                self.classify_prompt = data.get("classify", "")
-                self.price_prompt = data.get("price", "")
-                self.tech_prompt = data.get("tech", "")
-                self.default_prompt = data.get("default", "")
-                logger.info("从 prompt.json 加载提示词")
-                return
+                return {
+                    "classify_prompt": data.get("classify", ""),
+                    "price_prompt": data.get("price", ""),
+                    "tech_prompt": data.get("tech", ""),
+                    "default_prompt": data.get("default", ""),
+                }
             except Exception:
                 pass
 
-        self.classify_prompt = load_prompt("classify_prompt")
-        self.price_prompt = load_prompt("price_prompt")
-        self.tech_prompt = load_prompt("tech_prompt")
-        self.default_prompt = load_prompt("default_prompt")
-        logger.info("从文件加载提示词")
-        logger.debug(f"classify_prompt ({len(self.classify_prompt)}字): {self.classify_prompt[:200]}...")
-        logger.debug(f"price_prompt ({len(self.price_prompt)}字): {self.price_prompt[:200]}...")
-        logger.debug(f"tech_prompt ({len(self.tech_prompt)}字): {self.tech_prompt[:200]}...")
-        logger.debug(f"default_prompt ({len(self.default_prompt)}字): {self.default_prompt[:200]}...")
+        return {
+            "classify_prompt": load_prompt("classify_prompt"),
+            "price_prompt": load_prompt("price_prompt"),
+            "tech_prompt": load_prompt("tech_prompt"),
+            "default_prompt": load_prompt("default_prompt"),
+        }
 
     async def load_prompts_from_db(self):
         try:
@@ -78,24 +81,42 @@ class XianyuReplyBot:
                 result = await db.execute(select(SystemConfig).where(SystemConfig.key_name.in_(prompt_keys)))
                 db_prompts = {r.key_name: r.value for r in result.scalars()}
 
-            if db_prompts.get("prompt:classify_prompt"):
-                self.classify_prompt = db_prompts["prompt:classify_prompt"]
-            if db_prompts.get("prompt:price_prompt"):
-                self.price_prompt = db_prompts["prompt:price_prompt"]
-            if db_prompts.get("prompt:tech_prompt"):
-                self.tech_prompt = db_prompts["prompt:tech_prompt"]
-            if db_prompts.get("prompt:default_prompt"):
-                self.default_prompt = db_prompts["prompt:default_prompt"]
+            # 如果DB中缺少提示词，从文件加载默认值并写入DB
+            missing_keys = [k for k in prompt_keys if not db_prompts.get(k)]
+            if missing_keys:
+                file_prompts = self._load_file_prompts()
+                async with AsyncSessionLocal() as db:
+                    for key in missing_keys:
+                        name = key.replace("prompt:", "")
+                        value = file_prompts.get(name, "")
+                        if value:
+                            db.add(SystemConfig(key_name=key, value=value))
+                            db_prompts[key] = value
+                    await db.commit()
+                logger.info(f"已将 {len(missing_keys)} 个默认提示词写入数据库")
 
-            if any(db_prompts.values()):
-                self._init_agents()
-                self.router = IntentRouter(self.agents["classify"])
-                logger.info("从数据库加载提示词")
-                for k, v in db_prompts.items():
-                    if v:
-                        logger.debug(f"DB提示词 {k} ({len(v)}字): {v[:200]}...")
+            # 从DB加载所有提示词
+            self.classify_prompt = db_prompts.get("prompt:classify_prompt", "")
+            self.price_prompt = db_prompts.get("prompt:price_prompt", "")
+            self.tech_prompt = db_prompts.get("prompt:tech_prompt", "")
+            self.default_prompt = db_prompts.get("prompt:default_prompt", "")
+
+            self._init_agents()
+            self.router = IntentRouter(self.agents["classify"])
+            logger.info("从数据库加载提示词完成")
+            logger.debug(f"classify_prompt ({len(self.classify_prompt)}字): {self.classify_prompt[:200]}...")
+            logger.debug(f"price_prompt ({len(self.price_prompt)}字): {self.price_prompt[:200]}...")
+            logger.debug(f"tech_prompt ({len(self.tech_prompt)}字): {self.tech_prompt[:200]}...")
+            logger.debug(f"default_prompt ({len(self.default_prompt)}字): {self.default_prompt[:200]}...")
         except Exception as e:
-            logger.warning(f"从数据库加载提示词失败，使用文件默认值: {e}")
+            logger.warning(f"从数据库加载提示词失败，回退到文件: {e}")
+            file_prompts = self._load_file_prompts()
+            self.classify_prompt = file_prompts["classify_prompt"]
+            self.price_prompt = file_prompts["price_prompt"]
+            self.tech_prompt = file_prompts["tech_prompt"]
+            self.default_prompt = file_prompts["default_prompt"]
+            self._init_agents()
+            self.router = IntentRouter(self.agents["classify"])
 
     def _safe_filter(self, text: str) -> str:
         if not text:
@@ -145,7 +166,3 @@ class XianyuReplyBot:
                     return int(match.group(1))
         return 0
 
-    def reload_prompts(self):
-        self._init_system_prompts()
-        self._init_agents()
-        self.router = IntentRouter(self.agents["classify"])

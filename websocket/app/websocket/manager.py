@@ -261,7 +261,6 @@ class XianyuLive:
                     heartbeat_msg = {"lwp": "/!", "headers": {"mid": generate_mid()}}
                     await ws.send(json.dumps(heartbeat_msg))
                     self.last_heartbeat_time = time.time()
-                    logger.debug("心跳包已发送")
 
                 if (current_time - self.last_heartbeat_response) > (self.heartbeat_interval + self.heartbeat_timeout):
                     logger.warning("心跳响应超时，可能连接已断开")
