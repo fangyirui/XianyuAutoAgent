@@ -177,10 +177,13 @@ class XianyuLive:
         if not message:
             return
         if is_typing_status(message) or not is_chat_message(message):
+            logger.debug(f"非聊天消息，跳过 | typing={is_typing_status(message)}, chat={is_chat_message(message)}")
             return
 
         create_time = int(message["1"]["5"])
-        if (time.time() * 1000 - create_time) > self.message_expire_time:
+        age_ms = time.time() * 1000 - create_time
+        if age_ms > self.message_expire_time:
+            logger.debug(f"消息过期，age={age_ms:.0f}ms > {self.message_expire_time}ms")
             return
 
         send_user_id = message["1"]["10"]["senderUserId"]
@@ -190,6 +193,7 @@ class XianyuLive:
         chat_id = message["1"]["2"].split("@")[0]
 
         if not item_id:
+            logger.debug(f"无item_id，跳过 | chat_id={chat_id}, url_info={url_info}")
             return
 
         if send_user_id == self.myid:
@@ -199,43 +203,52 @@ class XianyuLive:
                 return
             conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id)
             await self._add_message(conv.id, "assistant", send_message)
+            logger.debug(f"自己发送的消息已记录 | chat_id={chat_id}")
             return
 
-        logger.info(f"用户消息 | 会话: {chat_id}, 商品: {item_id}, 内容: {send_message}")
+        logger.info(f"收到用户消息 | 会话: {chat_id}, 用户: {send_user_id}, 商品: {item_id}, 内容: {send_message}")
 
         if self.is_manual_mode(chat_id):
             conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id)
             await self._add_message(conv.id, "user", send_message)
+            logger.info(f"人工接管中，仅记录 | chat_id={chat_id}")
             return
 
         if is_bracket_system_message(send_message):
+            logger.debug(f"系统方括号消息，跳过: {send_message}")
             return
 
         item_info = await self._get_item_cache(item_id)
         if not item_info:
+            logger.info(f"商品缓存未命中，调用API | item_id={item_id}")
             api_result = await self.apis.get_item_info(item_id)
             if "data" in api_result and "itemDO" in api_result["data"]:
                 item_info = api_result["data"]["itemDO"]
                 await self._save_item_cache(item_id, item_info)
+                logger.info(f"商品信息已缓存 | item_id={item_id}, title={item_info.get('title', '')}")
             else:
+                logger.warning(f"获取商品信息失败 | item_id={item_id}, response_keys={list(api_result.keys())}")
                 return
 
         conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id)
         context = await self._get_context(conv.id)
         item_desc = f"当前商品的信息如下：{self.build_item_description(item_info)}"
+        logger.info(f"开始生成AI回复 | chat_id={chat_id}, 上下文条数={len(context)}")
         bot_reply = await self.bot.generate_reply(send_message, item_desc, context)
 
         if bot_reply == "-":
+            logger.info(f"AI返回'-'，不回复 | chat_id={chat_id}")
             return
 
         await self._add_message(conv.id, "user", send_message)
         if self.bot.last_intent == "price":
             await self._increment_bargain(chat_id)
         await self._add_message(conv.id, "assistant", bot_reply)
-        logger.info(f"机器人回复: {bot_reply}")
+        logger.info(f"AI回复完成 | chat_id={chat_id}, 意图={self.bot.last_intent}, 回复: {bot_reply}")
 
         if self.simulate_human_typing:
             delay = min(random.uniform(0, 1) + len(bot_reply) * random.uniform(0.1, 0.3), 10.0)
+            logger.debug(f"模拟打字延迟 {delay:.1f}s")
             await asyncio.sleep(delay)
 
         await self.send_msg(ws, chat_id, send_user_id, bot_reply)
@@ -255,13 +268,16 @@ class XianyuLive:
             try:
                 self.connection_restart_flag = False
                 if self.token_mgr.needs_refresh():
+                    logger.info("Token需要刷新...")
                     await self.token_mgr.refresh()
+                    logger.info("Token刷新完成")
                 if not self.token_mgr.current_token:
                     logger.error("无法获取Token，等待重试...")
                     await asyncio.sleep(30)
                     continue
 
                 headers = {"Cookie": self.cookies_str, "Host": "wss-goofish.dingtalk.com", "Origin": "https://www.goofish.com"}
+                logger.info("正在连接WebSocket...")
                 async with websockets.connect("wss://wss-goofish.dingtalk.com/", extra_headers=headers) as ws:
                     self.ws = ws
                     reg_msg = {
@@ -277,7 +293,7 @@ class XianyuLive:
                     }
                     await ws.send(json.dumps(reg_msg))
                     await asyncio.sleep(1)
-                    logger.info("连接注册完成")
+                    logger.info(f"WebSocket连接注册完成 | myid={self.myid}, device_id={self.device_id}")
 
                     self.last_heartbeat_time = time.time()
                     self.last_heartbeat_response = time.time()
@@ -290,15 +306,17 @@ class XianyuLive:
                         if data.get("code") == 200 and "mid" in data.get("headers", {}):
                             self.last_heartbeat_response = time.time()
                             continue
+                        logger.debug(f"收到WebSocket消息 | lwp={data.get('lwp', 'N/A')}, keys={list(data.keys())}")
                         await self.handle_message(data, ws)
 
                     hb_task.cancel()
 
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("WebSocket连接关闭")
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.warning(f"WebSocket连接关闭: code={e.code}, reason={e.reason}")
             except Exception as e:
-                logger.error(f"连接错误: {e}")
+                logger.error(f"连接错误: {e}", exc_info=True)
             finally:
                 self.ws = None
                 if not self.connection_restart_flag:
+                    logger.info("5秒后重连...")
                     await asyncio.sleep(5)

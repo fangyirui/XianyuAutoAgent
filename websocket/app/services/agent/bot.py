@@ -62,6 +62,10 @@ class XianyuReplyBot:
         self.tech_prompt = load_prompt("tech_prompt")
         self.default_prompt = load_prompt("default_prompt")
         logger.info("从文件加载提示词")
+        logger.debug(f"classify_prompt ({len(self.classify_prompt)}字): {self.classify_prompt[:200]}...")
+        logger.debug(f"price_prompt ({len(self.price_prompt)}字): {self.price_prompt[:200]}...")
+        logger.debug(f"tech_prompt ({len(self.tech_prompt)}字): {self.tech_prompt[:200]}...")
+        logger.debug(f"default_prompt ({len(self.default_prompt)}字): {self.default_prompt[:200]}...")
 
     async def load_prompts_from_db(self):
         try:
@@ -87,6 +91,9 @@ class XianyuReplyBot:
                 self._init_agents()
                 self.router = IntentRouter(self.agents["classify"])
                 logger.info("从数据库加载提示词")
+                for k, v in db_prompts.items():
+                    if v:
+                        logger.debug(f"DB提示词 {k} ({len(v)}字): {v[:200]}...")
         except Exception as e:
             logger.warning(f"从数据库加载提示词失败，使用文件默认值: {e}")
 
@@ -101,11 +108,16 @@ class XianyuReplyBot:
         return "\n".join(f"{m['role']}: {m['content']}" for m in msgs)
 
     async def generate_reply(self, user_msg: str, item_desc: str, context: List[Dict]) -> str:
+        logger.info(f"[Bot] 开始处理 | 用户消息: {user_msg}")
+        logger.debug(f"[Bot] 商品信息: {item_desc}")
+        logger.debug(f"[Bot] 上下文条数: {len(context)}")
+
         formatted_context = self.format_history(context)
         detected_intent = await self.router.detect(user_msg, item_desc, formatted_context)
 
         if detected_intent == "no_reply":
             self.last_intent = "no_reply"
+            logger.info("[Bot] 意图=no_reply，跳过回复")
             return "-"
 
         internal_intents = {"classify"}
@@ -116,10 +128,14 @@ class XianyuReplyBot:
             agent = self.agents["default"]
             self.last_intent = "default"
 
+        logger.info(f"[Bot] 最终意图={self.last_intent}，使用 {agent.__class__.__name__}")
+
         bargain_count = self._extract_bargain_count(context)
-        return await agent.generate(
+        reply = await agent.generate(
             user_msg=user_msg, item_desc=item_desc, context=formatted_context, bargain_count=bargain_count
         )
+        logger.info(f"[Bot] 最终回复: {reply}")
+        return reply
 
     def _extract_bargain_count(self, context: List[Dict]) -> int:
         for msg in context:

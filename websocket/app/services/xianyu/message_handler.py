@@ -54,16 +54,21 @@ def is_bracket_system_message(text: str) -> bool:
 
 def decrypt_sync_data(sync_data: dict) -> dict | None:
     if "data" not in sync_data:
+        logger.debug("sync_data中无data字段")
         return None
     data = sync_data["data"]
     try:
         decoded = base64.b64decode(data).decode("utf-8")
+        json.loads(decoded)
+        logger.debug("消息为纯文本JSON（系统消息），跳过")
         return None
     except Exception:
         pass
     try:
         decrypted = decrypt(data)
-        return json.loads(decrypted)
+        result = json.loads(decrypted)
+        logger.debug(f"消息解密成功，keys={list(result.keys()) if isinstance(result, dict) else type(result)}")
+        return result
     except Exception as e:
         logger.error(f"消息解密失败: {e}")
         return None
