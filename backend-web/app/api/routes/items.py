@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, nulls_last
+from sqlalchemy import select, func
 from common.db import get_db
 from common.models import ItemCache
 from app.api.deps import get_current_user
@@ -26,7 +26,7 @@ async def list_items(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    query = query.order_by(nulls_last(ItemCache.fetched_at.desc())).offset((page - 1) * page_size).limit(page_size)
+    query = query.order_by(ItemCache.fetched_at.desc().nulls_last()).offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     rows = result.scalars().all()
 

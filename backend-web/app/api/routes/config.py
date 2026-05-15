@@ -72,10 +72,11 @@ async def update_env_config(body: EnvConfigUpdate, db: AsyncSession = Depends(ge
             continue
         if k == "COOKIES_STR":
             # Cookie 存入 sellers 表
-            cookies_str = v
+            cookies_str = v.strip()
             # 从 cookie 中提取 user_id (unb 字段)
             user_id = ""
             for part in cookies_str.split("; "):
+                part = part.strip()
                 if part.startswith("unb="):
                     user_id = part.split("=", 1)[1]
                     break
