@@ -40,3 +40,15 @@ CREATE TABLE IF NOT EXISTS system_config (
     value TEXT,
     updated_at DATETIME DEFAULT NOW() ON UPDATE NOW()
 );
+
+CREATE TABLE IF NOT EXISTS sellers (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id VARCHAR(64) UNIQUE NOT NULL COMMENT '闲鱼用户ID（cookie中unb字段）',
+    nickname VARCHAR(128) COMMENT '卖家昵称',
+    cookies_str TEXT NOT NULL COMMENT '闲鱼Cookie',
+    is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
+    last_login_at DATETIME COMMENT '最后登录时间',
+    created_at DATETIME DEFAULT NOW(),
+    updated_at DATETIME DEFAULT NOW() ON UPDATE NOW(),
+    INDEX idx_sellers_is_active (is_active)
+);

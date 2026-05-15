@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from loguru import logger
 from common.db import get_db, get_redis
-from common.models import SystemConfig
+from common.models import SystemConfig, Seller
 from app.api.deps import get_current_user
 import aiohttp
 
@@ -130,17 +130,22 @@ async def qrlogin_status(t: str = Query(...), db: AsyncSession = Depends(get_db)
 
                 cookie_str = "; ".join([f"{k}={v}" for k, v in all_cookies.items()])
                 if cookie_str:
-                    result = await db.execute(select(SystemConfig).where(SystemConfig.key_name == "COOKIES_STR"))
-                    row = result.scalar_one_or_none()
-                    if row:
-                        row.value = cookie_str
+                    # 保存到 sellers 表
+                    user_id = all_cookies.get("unb", "")
+                    if user_id:
+                        result = await db.execute(select(Seller).where(Seller.user_id == user_id))
+                        seller = result.scalar_one_or_none()
+                        if seller:
+                            seller.cookies_str = cookie_str
+                            seller.is_active = True
+                        else:
+                            db.add(Seller(user_id=user_id, cookies_str=cookie_str, is_active=True))
+                        await db.commit()
+                        r = await get_redis()
+                        await r.publish("config:reload", "qrlogin")
+                        logger.info(f"扫码登录成功，Cookie 已保存到 sellers 表 ({len(all_cookies)} 项)")
                     else:
-                        db.add(SystemConfig(key_name="COOKIES_STR", value=cookie_str))
-                    await db.commit()
-
-                    r = await get_redis()
-                    await r.publish("config:reload", "qrlogin")
-                    logger.info(f"扫码登录成功，Cookie 已保存 ({len(all_cookies)} 项)")
+                        logger.warning(f"扫码登录成功但 Cookie 中缺少 unb 字段，无法保存到 sellers 表")
 
                 _qr_sessions.pop(t, None)
                 return {"status": "CONFIRMED"}

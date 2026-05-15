@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Settings, MessageSquare, ScrollText, LogOut } from 'lucide-react'
+import { LayoutDashboard, Settings, MessageSquare, ScrollText, Package, LogOut } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '仪表盘' },
   { to: '/runtime-logs', icon: ScrollText, label: '运行日志' },
   { to: '/logs', icon: MessageSquare, label: '对话日志' },
+  { to: '/items', icon: Package, label: '商品缓存' },
   { to: '/settings', icon: Settings, label: '设置' },
 ]
 

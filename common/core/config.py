@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings
 
-DB_OVERRIDABLE_KEYS = ("API_KEY", "MODEL_BASE_URL", "MODEL_NAME", "COOKIES_STR")
+DB_OVERRIDABLE_KEYS = ("API_KEY", "MODEL_BASE_URL", "MODEL_NAME")
 
 
 class Settings(BaseSettings):
@@ -62,8 +62,17 @@ class Settings(BaseSettings):
                     select(SystemConfig).where(SystemConfig.key_name.in_(DB_OVERRIDABLE_KEYS))
                 )
                 for row in result.scalars():
-                    if row.value:
+                    if row.value and row.key_name != "COOKIES_STR":
                         object.__setattr__(self, row.key_name, row.value)
+
+                # Cookie 从 sellers 表读取
+                from common.models import Seller
+                seller_result = await db.execute(
+                    select(Seller).where(Seller.is_active.is_(True)).limit(1)
+                )
+                seller = seller_result.scalar_one_or_none()
+                if seller and seller.cookies_str:
+                    object.__setattr__(self, "COOKIES_STR", seller.cookies_str)
         except Exception:
             pass
 

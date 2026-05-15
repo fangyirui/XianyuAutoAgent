@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from common.db import get_db, get_redis
-from common.models import SystemConfig
+from common.models import SystemConfig, Seller
 from common.schemas import ConfigItem, ConfigUpdate, PromptUpdate
 from common.core.config import DB_OVERRIDABLE_KEYS, settings
 from app.api.deps import get_current_user
@@ -47,11 +47,17 @@ async def get_env_config(db: AsyncSession = Depends(get_db)):
         select(SystemConfig).where(SystemConfig.key_name.in_(DB_OVERRIDABLE_KEYS))
     )
     db_values = {r.key_name: r.value for r in result.scalars()}
+
+    # Cookie 从 sellers 表读取（取第一个活跃卖家）
+    seller_result = await db.execute(select(Seller).where(Seller.is_active.is_(True)).limit(1))
+    seller = seller_result.scalar_one_or_none()
+    cookies_str = seller.cookies_str if seller else (db_values.get("COOKIES_STR") or settings.COOKIES_STR)
+
     return EnvConfigResponse(
         API_KEY=_mask(db_values.get("API_KEY") or settings.API_KEY),
         MODEL_BASE_URL=db_values.get("MODEL_BASE_URL") or settings.MODEL_BASE_URL,
         MODEL_NAME=db_values.get("MODEL_NAME") or settings.MODEL_NAME,
-        COOKIES_STR=db_values.get("COOKIES_STR") or settings.COOKIES_STR,
+        COOKIES_STR=cookies_str,
     )
 
 
@@ -64,7 +70,27 @@ async def update_env_config(body: EnvConfigUpdate, db: AsyncSession = Depends(ge
             continue
         if k == "API_KEY" and "***" in v:
             continue
+        if k == "COOKIES_STR":
+            # Cookie 存入 sellers 表
+            cookies_str = v
+            # 从 cookie 中提取 user_id (unb 字段)
+            user_id = ""
+            for part in cookies_str.split("; "):
+                if part.startswith("unb="):
+                    user_id = part.split("=", 1)[1]
+                    break
+            if not user_id:
+                raise HTTPException(status_code=400, detail="Cookie 中未找到 unb 字段，无法识别卖家身份")
+            result = await db.execute(select(Seller).where(Seller.user_id == user_id))
+            seller = result.scalar_one_or_none()
+            if seller:
+                seller.cookies_str = cookies_str
+                seller.is_active = True
+            else:
+                db.add(Seller(user_id=user_id, cookies_str=cookies_str, is_active=True))
+            continue
         updates[k] = v
+
     for key, value in updates.items():
         result = await db.execute(select(SystemConfig).where(SystemConfig.key_name == key))
         row = result.scalar_one_or_none()

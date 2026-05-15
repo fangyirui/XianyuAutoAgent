@@ -230,6 +230,14 @@ class XianyuLive:
                 logger.warning(f"获取商品信息失败 | item_id={item_id}, response_keys={list(api_result.keys())}")
                 return
 
+        # 检查商品是否属于当前卖家
+        item_owner = str(item_info.get("userId", "") or item_info.get("sellerId", "") or item_info.get("user_id", ""))
+        if not item_owner:
+            logger.debug(f"商品信息中未找到卖家ID字段 | item_id={item_id}, keys={list(item_info.keys())}")
+        elif item_owner != str(self.myid):
+            logger.debug(f"商品不属于当前卖家，跳过AI回复 | item_id={item_id}, owner={item_owner}, myid={self.myid}")
+            return
+
         conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id)
         context = await self._get_context(conv.id)
         item_desc = f"当前商品的信息如下：{self.build_item_description(item_info)}"
