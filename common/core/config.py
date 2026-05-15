@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings
 
+DB_OVERRIDABLE_KEYS = ("API_KEY", "MODEL_BASE_URL", "MODEL_NAME", "COOKIES_STR")
+
 
 class Settings(BaseSettings):
     MYSQL_HOST: str = "localhost"
@@ -49,9 +51,23 @@ class Settings(BaseSettings):
     def REDIS_URL(self) -> str:
         return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
+    async def load_from_db(self):
+        from common.db import AsyncSessionLocal
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as db:
+            from common.models import SystemConfig
+            result = await db.execute(
+                select(SystemConfig).where(SystemConfig.key_name.in_(DB_OVERRIDABLE_KEYS))
+            )
+            for row in result.scalars():
+                if row.value:
+                    object.__setattr__(self, row.key_name, row.value)
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 settings = Settings()

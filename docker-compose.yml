@@ -39,6 +39,10 @@ services:
     ports:
       - "8089:8089"
     env_file: .env
+    environment:
+      - MYSQL_HOST=mysql
+      - REDIS_HOST=redis
+      - WEBSOCKET_SERVICE_URL=http://websocket:8090
     depends_on:
       mysql:
         condition: service_healthy
@@ -54,6 +58,9 @@ services:
     ports:
       - "8090:8090"
     env_file: .env
+    environment:
+      - MYSQL_HOST=mysql
+      - REDIS_HOST=redis
     depends_on:
       mysql:
         condition: service_healthy

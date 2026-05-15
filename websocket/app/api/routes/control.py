@@ -20,6 +20,13 @@ async def reconnect():
     return {"status": "not_running"}
 
 
+@router.post("/reload")
+async def reload():
+    from ... import _reload
+    await _reload()
+    return {"status": "reloaded"}
+
+
 @router.post("/manual-mode/{chat_id}")
 async def toggle_manual(chat_id: str):
     if not _live_instance:

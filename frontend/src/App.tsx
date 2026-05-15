@@ -4,6 +4,7 @@ import LoginPage from '@/pages/auth/LoginPage'
 import DashboardPage from '@/pages/dashboard/DashboardPage'
 import SettingsPage from '@/pages/settings/SettingsPage'
 import LogsPage from '@/pages/logs/LogsPage'
+import RuntimeLogsPage from '@/pages/logs/RuntimeLogsPage'
 import AppLayout from '@/components/layout/AppLayout'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -19,6 +20,7 @@ export default function App() {
         <Route index element={<DashboardPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="logs" element={<LogsPage />} />
+        <Route path="runtime-logs" element={<RuntimeLogsPage />} />
       </Route>
     </Routes>
   )

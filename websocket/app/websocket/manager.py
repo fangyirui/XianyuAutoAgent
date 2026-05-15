@@ -43,10 +43,17 @@ class XianyuLive:
         self.message_expire_time = settings.MESSAGE_EXPIRE_TIME
         self.toggle_keywords = settings.TOGGLE_KEYWORDS
         self.simulate_human_typing = settings.SIMULATE_HUMAN_TYPING
+        self._stopped = False
 
     @property
     def is_connected(self) -> bool:
         return self.ws is not None and self.ws.open
+
+    async def stop(self):
+        self._stopped = True
+        self.connection_restart_flag = True
+        if self.ws:
+            await self.ws.close()
 
     def is_manual_mode(self, chat_id: str) -> bool:
         if chat_id not in self.manual_mode_conversations:
@@ -244,7 +251,7 @@ class XianyuLive:
             await asyncio.sleep(1)
 
     async def run(self):
-        while True:
+        while not self._stopped:
             try:
                 self.connection_restart_flag = False
                 if self.token_mgr.needs_refresh():
