@@ -30,7 +30,7 @@ ENV/
 .venv/
 
 # 日志文件
-logs/
+/logs/
 *.log
 
 # 数据库文件
