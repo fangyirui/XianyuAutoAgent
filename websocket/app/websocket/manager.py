@@ -255,13 +255,22 @@ class XianyuLive:
 
     async def heartbeat_loop(self, ws):
         while True:
-            if time.time() - self.last_heartbeat_time >= self.heartbeat_interval:
-                await ws.send(json.dumps({"lwp": "/!", "headers": {"mid": generate_mid()}}))
-                self.last_heartbeat_time = time.time()
-            if (time.time() - self.last_heartbeat_response) > (self.heartbeat_interval + self.heartbeat_timeout):
-                logger.warning("心跳超时")
+            try:
+                current_time = time.time()
+                if current_time - self.last_heartbeat_time >= self.heartbeat_interval:
+                    heartbeat_msg = {"lwp": "/!", "headers": {"mid": generate_mid()}}
+                    await ws.send(json.dumps(heartbeat_msg))
+                    self.last_heartbeat_time = time.time()
+                    logger.debug("心跳包已发送")
+
+                if (current_time - self.last_heartbeat_response) > (self.heartbeat_interval + self.heartbeat_timeout):
+                    logger.warning("心跳响应超时，可能连接已断开")
+                    break
+
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.error(f"心跳循环出错: {e}")
                 break
-            await asyncio.sleep(1)
 
     async def run(self):
         while not self._stopped:
@@ -276,40 +285,113 @@ class XianyuLive:
                     await asyncio.sleep(30)
                     continue
 
-                headers = {"Cookie": self.cookies_str, "Host": "wss-goofish.dingtalk.com", "Origin": "https://www.goofish.com"}
+                headers = {
+                    "Cookie": self.cookies_str,
+                    "Host": "wss-goofish.dingtalk.com",
+                    "Connection": "Upgrade",
+                    "Pragma": "no-cache",
+                    "Cache-Control": "no-cache",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+                    "Origin": "https://www.goofish.com",
+                    "Accept-Encoding": "gzip, deflate, br, zstd",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
+                }
                 logger.info("正在连接WebSocket...")
                 async with websockets.connect("wss://wss-goofish.dingtalk.com/", extra_headers=headers) as ws:
                     self.ws = ws
+
+                    # 注册
                     reg_msg = {
                         "lwp": "/reg",
                         "headers": {
                             "cache-header": "app-key token ua wv",
                             "app-key": "444e9908a51d1cb236a27862abc769c9",
                             "token": self.token_mgr.current_token,
-                            "ua": "Mozilla/5.0 DingTalk(2.1.5) DingWeb/2.1.5 IMPaaS",
-                            "dt": "j", "wv": "im:3,au:3,sy:6", "sync": "0,0;0;0;",
-                            "did": self.device_id, "mid": generate_mid(),
+                            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 DingTalk(2.1.5) OS(Windows/10) Browser(Chrome/133.0.0.0) DingWeb/2.1.5 IMPaaS DingWeb/2.1.5",
+                            "dt": "j",
+                            "wv": "im:3,au:3,sy:6",
+                            "sync": "0,0;0;0;",
+                            "did": self.device_id,
+                            "mid": generate_mid(),
                         },
                     }
                     await ws.send(json.dumps(reg_msg))
                     await asyncio.sleep(1)
+
+                    # 发送 ackDiff（与原版一致）
+                    ack_diff_msg = {
+                        "lwp": "/r/SyncStatus/ackDiff",
+                        "headers": {"mid": generate_mid()},
+                        "body": [{
+                            "pipeline": "sync",
+                            "tooLong2Tag": "PNM,1",
+                            "channel": "sync",
+                            "topic": "sync",
+                            "highPts": 0,
+                            "pts": int(time.time() * 1000) * 1000,
+                            "seq": 0,
+                            "timestamp": int(time.time() * 1000),
+                        }],
+                    }
+                    await ws.send(json.dumps(ack_diff_msg))
                     logger.info(f"WebSocket连接注册完成 | myid={self.myid}, device_id={self.device_id}")
 
+                    # 初始化心跳时间
                     self.last_heartbeat_time = time.time()
                     self.last_heartbeat_response = time.time()
+
+                    # 启动心跳任务
                     hb_task = asyncio.create_task(self.heartbeat_loop(ws))
 
                     async for raw in ws:
-                        if self.connection_restart_flag:
-                            break
-                        data = json.loads(raw)
-                        if data.get("code") == 200 and "mid" in data.get("headers", {}):
-                            self.last_heartbeat_response = time.time()
-                            continue
-                        logger.debug(f"收到WebSocket消息 | lwp={data.get('lwp', 'N/A')}, keys={list(data.keys())}")
-                        await self.handle_message(data, ws)
+                        try:
+                            if self.connection_restart_flag:
+                                logger.info("检测到连接重启标志，准备重新建立连接...")
+                                break
+
+                            data = json.loads(raw)
+
+                            # 处理心跳响应
+                            if (
+                                isinstance(data, dict)
+                                and "code" in data
+                                and data["code"] == 200
+                                and "headers" in data
+                                and "mid" in data["headers"]
+                            ):
+                                self.last_heartbeat_response = time.time()
+                                logger.debug("收到心跳响应")
+                                continue
+
+                            # 发送通用ACK响应
+                            if "headers" in data and "mid" in data.get("headers", {}):
+                                ack = {
+                                    "code": 200,
+                                    "headers": {
+                                        "mid": data["headers"]["mid"],
+                                        "sid": data["headers"].get("sid", ""),
+                                    }
+                                }
+                                for key in ("app-key", "ua", "dt"):
+                                    if key in data["headers"]:
+                                        ack["headers"][key] = data["headers"][key]
+                                await ws.send(json.dumps(ack))
+
+                            # 处理消息
+                            logger.debug(f"收到WebSocket消息 | lwp={data.get('lwp', 'N/A')}, keys={list(data.keys())}")
+                            await self.handle_message(data, ws)
+
+                        except json.JSONDecodeError:
+                            logger.error("消息JSON解析失败")
+                        except Exception as e:
+                            logger.error(f"处理消息时发生错误: {e}")
+                            logger.debug(f"原始消息: {raw}")
 
                     hb_task.cancel()
+                    try:
+                        await hb_task
+                    except asyncio.CancelledError:
+                        pass
 
             except websockets.exceptions.ConnectionClosed as e:
                 logger.warning(f"WebSocket连接关闭: code={e.code}, reason={e.reason}")
@@ -317,6 +399,8 @@ class XianyuLive:
                 logger.error(f"连接错误: {e}", exc_info=True)
             finally:
                 self.ws = None
-                if not self.connection_restart_flag:
-                    logger.info("5秒后重连...")
+                if self.connection_restart_flag:
+                    logger.info("主动重启连接，立即重连...")
+                else:
+                    logger.info("等待5秒后重连...")
                     await asyncio.sleep(5)
