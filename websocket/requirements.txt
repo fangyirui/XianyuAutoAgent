@@ -3,6 +3,7 @@ uvicorn==0.30.6
 pydantic-settings==2.2.1
 sqlalchemy[asyncio]==2.0.29
 asyncmy==0.2.9
+cryptography==42.0.5
 redis==5.0.3
 openai==1.65.5
 websockets==13.1

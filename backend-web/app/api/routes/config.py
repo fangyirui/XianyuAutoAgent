@@ -104,7 +104,7 @@ async def test_ai_connection(body: AiTestRequest, db: AsyncSession = Depends(get
 
 
 PROMPT_NAMES = ["classify_prompt", "price_prompt", "tech_prompt", "default_prompt"]
-PROMPT_JSON_PATH = Path(__file__).parent.parent.parent.parent.parent / "websocket" / "prompts" / "prompt.json"
+PROMPT_JSON_PATH = Path(__file__).parent.parent.parent.parent / "websocket" / "prompts" / "prompt.json"
 PROMPT_KEY_MAP = {"classify_prompt": "classify", "price_prompt": "price", "tech_prompt": "tech", "default_prompt": "default"}
 
 

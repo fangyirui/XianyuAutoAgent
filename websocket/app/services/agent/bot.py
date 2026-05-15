@@ -64,28 +64,31 @@ class XianyuReplyBot:
         logger.info("从文件加载提示词")
 
     async def load_prompts_from_db(self):
-        from common.db import AsyncSessionLocal
-        from sqlalchemy import select
-        from common.models import SystemConfig
+        try:
+            from common.db import AsyncSessionLocal
+            from sqlalchemy import select
+            from common.models import SystemConfig
 
-        prompt_keys = ["prompt:classify_prompt", "prompt:price_prompt", "prompt:tech_prompt", "prompt:default_prompt"]
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(SystemConfig).where(SystemConfig.key_name.in_(prompt_keys)))
-            db_prompts = {r.key_name: r.value for r in result.scalars()}
+            prompt_keys = ["prompt:classify_prompt", "prompt:price_prompt", "prompt:tech_prompt", "prompt:default_prompt"]
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(SystemConfig).where(SystemConfig.key_name.in_(prompt_keys)))
+                db_prompts = {r.key_name: r.value for r in result.scalars()}
 
-        if db_prompts.get("prompt:classify_prompt"):
-            self.classify_prompt = db_prompts["prompt:classify_prompt"]
-        if db_prompts.get("prompt:price_prompt"):
-            self.price_prompt = db_prompts["prompt:price_prompt"]
-        if db_prompts.get("prompt:tech_prompt"):
-            self.tech_prompt = db_prompts["prompt:tech_prompt"]
-        if db_prompts.get("prompt:default_prompt"):
-            self.default_prompt = db_prompts["prompt:default_prompt"]
+            if db_prompts.get("prompt:classify_prompt"):
+                self.classify_prompt = db_prompts["prompt:classify_prompt"]
+            if db_prompts.get("prompt:price_prompt"):
+                self.price_prompt = db_prompts["prompt:price_prompt"]
+            if db_prompts.get("prompt:tech_prompt"):
+                self.tech_prompt = db_prompts["prompt:tech_prompt"]
+            if db_prompts.get("prompt:default_prompt"):
+                self.default_prompt = db_prompts["prompt:default_prompt"]
 
-        if any(db_prompts.values()):
-            self._init_agents()
-            self.router = IntentRouter(self.agents["classify"])
-            logger.info("从数据库加载提示词")
+            if any(db_prompts.values()):
+                self._init_agents()
+                self.router = IntentRouter(self.agents["classify"])
+                logger.info("从数据库加载提示词")
+        except Exception as e:
+            logger.warning(f"从数据库加载提示词失败，使用文件默认值: {e}")
 
     def _safe_filter(self, text: str) -> str:
         if not text:

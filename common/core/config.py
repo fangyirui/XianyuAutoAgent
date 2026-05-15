@@ -52,17 +52,20 @@ class Settings(BaseSettings):
         return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
     async def load_from_db(self):
-        from common.db import AsyncSessionLocal
-        from sqlalchemy import select
+        try:
+            from common.db import AsyncSessionLocal
+            from sqlalchemy import select
 
-        async with AsyncSessionLocal() as db:
-            from common.models import SystemConfig
-            result = await db.execute(
-                select(SystemConfig).where(SystemConfig.key_name.in_(DB_OVERRIDABLE_KEYS))
-            )
-            for row in result.scalars():
-                if row.value:
-                    object.__setattr__(self, row.key_name, row.value)
+            async with AsyncSessionLocal() as db:
+                from common.models import SystemConfig
+                result = await db.execute(
+                    select(SystemConfig).where(SystemConfig.key_name.in_(DB_OVERRIDABLE_KEYS))
+                )
+                for row in result.scalars():
+                    if row.value:
+                        object.__setattr__(self, row.key_name, row.value)
+        except Exception:
+            pass
 
     class Config:
         env_file = ".env"
