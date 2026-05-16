@@ -50,6 +50,29 @@ async def _reload():
     await _start_live()
 
 
+async def _soft_reload():
+    """热重载：刷新内存配置 + 重建 bot，不断开 WebSocket 连接。"""
+    global _live_instance
+    if not _live_instance:
+        logger.info("WebSocket未运行，尝试启动...")
+        await _start_live()
+        return
+
+    await settings.load_from_db()
+
+    _live_instance.skip_keywords = [k.strip() for k in settings.SKIP_KEYWORDS.split(",") if k.strip()]
+    _live_instance.toggle_keywords = settings.TOGGLE_KEYWORDS
+    _live_instance.manual_mode_timeout = settings.MANUAL_MODE_TIMEOUT
+    _live_instance.message_expire_time = settings.MESSAGE_EXPIRE_TIME
+    _live_instance.simulate_human_typing = settings.SIMULATE_HUMAN_TYPING
+
+    from .services.agent import XianyuReplyBot
+    _live_instance.bot = XianyuReplyBot()
+    await _live_instance.bot.load_prompts_from_db()
+
+    logger.info("配置已软重载（WebSocket 连接保持）")
+
+
 async def _redis_subscriber():
     import redis.asyncio as aioredis
     r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -57,8 +80,13 @@ async def _redis_subscriber():
     await pubsub.subscribe("config:reload")
     try:
         async for msg in pubsub.listen():
-            if msg["type"] == "message":
+            if msg["type"] != "message":
+                continue
+            data = msg.get("data", "")
+            if data in ("cookie_updated", "qrlogin"):
                 await _reload()
+            else:
+                await _soft_reload()
     except asyncio.CancelledError:
         await pubsub.unsubscribe("config:reload")
         await r.aclose()

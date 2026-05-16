@@ -68,12 +68,14 @@ async def get_env_config(db: AsyncSession = Depends(get_db)):
 async def update_env_config(body: EnvConfigUpdate, db: AsyncSession = Depends(get_db)):
     raw = body.model_dump()
     updates = {}
+    cookie_changed = False
     for k, v in raw.items():
         if v is None:
             continue
         if k == "API_KEY" and "***" in v:
             continue
         if k == "COOKIES_STR":
+            cookie_changed = True
             # Cookie 存入 sellers 表
             cookies_str = v.strip()
             # 从 cookie 中提取 user_id (unb 字段)
@@ -105,7 +107,7 @@ async def update_env_config(body: EnvConfigUpdate, db: AsyncSession = Depends(ge
     await db.commit()
 
     r = await get_redis()
-    await r.publish("config:reload", "env_updated")
+    await r.publish("config:reload", "cookie_updated" if cookie_changed else "env_updated")
     return {"status": "ok"}
 
 
