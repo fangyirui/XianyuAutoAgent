@@ -49,6 +49,7 @@ async def list_items(
         items.append({
             "id": r.id,
             "item_id": r.item_id,
+            "seller_id": r.seller_id or "",
             "title": r.title or "",
             "price": float(r.price) if r.price else 0,
             "description": r.description or "",

@@ -3,11 +3,13 @@ version: "3.8"
 services:
   mysql:
     image: mysql:8.0
+    command: --default-time-zone=+08:00
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-xianyu_root_123}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-xianyu}
       MYSQL_USER: ${MYSQL_USER:-xianyu}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-xianyu_pass_123}
+      TZ: Asia/Shanghai
     ports:
       - "3306:3306"
     volumes:
@@ -24,6 +26,8 @@ services:
   redis:
     image: redis:7-alpine
     command: redis-server --requirepass ${REDIS_PASSWORD:-xianyu_redis_123}
+    environment:
+      TZ: Asia/Shanghai
     ports:
       - "6379:6379"
     networks:
@@ -43,6 +47,7 @@ services:
       - MYSQL_HOST=mysql
       - REDIS_HOST=redis
       - WEBSOCKET_SERVICE_URL=http://websocket:8090
+      - TZ=Asia/Shanghai
     depends_on:
       mysql:
         condition: service_healthy
@@ -62,6 +67,7 @@ services:
     environment:
       - MYSQL_HOST=mysql
       - REDIS_HOST=redis
+      - TZ=Asia/Shanghai
     depends_on:
       mysql:
         condition: service_healthy
@@ -75,6 +81,8 @@ services:
 
   frontend:
     build: ./frontend
+    environment:
+      - TZ=Asia/Shanghai
     ports:
       - "80:80"
     depends_on:

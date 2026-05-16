@@ -66,9 +66,7 @@ def decrypt_sync_data(sync_data: dict) -> dict | None:
         pass
     try:
         decrypted = decrypt(data)
-        result = json.loads(decrypted)
-        logger.debug(f"消息解密成功，keys={list(result.keys()) if isinstance(result, dict) else type(result)}")
-        return result
+        return json.loads(decrypted)
     except Exception as e:
         logger.error(f"消息解密失败: {e}")
         return None

@@ -5,6 +5,7 @@ import base64
 import random
 import websockets
 from loguru import logger
+from datetime import datetime
 from sqlalchemy import select
 from common.core import settings
 from common.db import AsyncSessionLocal
@@ -130,6 +131,7 @@ class XianyuLive:
                 price = float(data.get("soldPrice", 0))
             except (ValueError, TypeError):
                 price = 0.0
+            now = datetime.now()
             if row:
                 row.raw_json = data
                 row.title = data.get("title", "") or row.title
@@ -137,6 +139,7 @@ class XianyuLive:
                     row.price = price
                 row.description = data.get("desc", "") or row.description
                 row.seller_id = str(self.myid)
+                row.fetched_at = now
             else:
                 db.add(ItemCache(
                     item_id=item_id, raw_json=data,
@@ -144,6 +147,7 @@ class XianyuLive:
                     price=price,
                     description=data.get("desc", ""),
                     seller_id=str(self.myid),
+                    fetched_at=now,
                 ))
             await db.commit()
 
@@ -152,6 +156,7 @@ class XianyuLive:
         if not items:
             return 0
         saved = 0
+        now = datetime.now()
         async with AsyncSessionLocal() as db:
             for it in items:
                 item_id = str(it.get("id", ""))
@@ -174,6 +179,7 @@ class XianyuLive:
                     row.seller_id = str(self.myid)
                     if not row.raw_json or "soldPrice" not in row.raw_json:
                         row.raw_json = it
+                    row.fetched_at = now
                 else:
                     db.add(ItemCache(
                         item_id=item_id,
@@ -182,13 +188,14 @@ class XianyuLive:
                         price=price,
                         description="",
                         seller_id=str(self.myid),
+                        fetched_at=now,
                     ))
                 saved += 1
             await db.commit()
         return saved
 
     async def sync_my_items(self) -> int:
-        """通过 mtop.idle.web.xyh.item.list 拉取卖家所有商品，建立归属表。"""
+        """通过 mtop.idle.web.xyh.item.list 拉取卖家所有商品，并补全详情（含 desc）。"""
         logger.info(f"开始同步商品列表 | seller={self.myid}")
         try:
             items = await self.apis.get_all_items(self.myid, page_size=20)
@@ -196,8 +203,48 @@ class XianyuLive:
             logger.error(f"同步商品列表失败: {e}")
             return 0
         saved = await self._batch_save_items_from_list(items)
-        logger.info(f"商品同步完成 | seller={self.myid}, 拉取={len(items)}条, 保存={saved}条")
+        logger.info(f"商品基础信息同步完成 | seller={self.myid}, 拉取={len(items)}条, 保存={saved}条")
+
+        item_ids = [str(it.get("id", "")) for it in items if it.get("id") and not str(it.get("id", "")).startswith("auto_")]
+        need_detail = await self._find_items_missing_detail(item_ids)
+        if need_detail:
+            logger.info(f"开始补全 {len(need_detail)} 件商品的详情")
+            await self._fetch_missing_details(need_detail)
+            logger.info(f"商品详情补全完成 | 总数={len(need_detail)}")
         return saved
+
+    async def _find_items_missing_detail(self, item_ids: list) -> list:
+        """筛出 item_cache 中 raw_json 不含 soldPrice 的商品ID。"""
+        if not item_ids:
+            return []
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(ItemCache.item_id, ItemCache.raw_json).where(ItemCache.item_id.in_(item_ids))
+            )
+            missing = []
+            for item_id, raw_json in result.all():
+                if not raw_json or "soldPrice" not in raw_json:
+                    missing.append(item_id)
+            return missing
+
+    async def _fetch_missing_details(self, item_ids: list):
+        """并发补全商品详情，限流 3，单条间隔 0.5s。"""
+        semaphore = asyncio.Semaphore(3)
+
+        async def fetch_one(item_id: str):
+            async with semaphore:
+                try:
+                    api_result = await self.apis.get_item_info(item_id)
+                    if "data" in api_result and "itemDO" in api_result["data"]:
+                        await self._save_item_cache(item_id, api_result["data"]["itemDO"])
+                        logger.info(f"✅ 详情已补全 | item_id={item_id}")
+                    else:
+                        logger.warning(f"❌ 详情获取失败 | item_id={item_id}, keys={list(api_result.keys()) if isinstance(api_result, dict) else type(api_result).__name__}")
+                except Exception as e:
+                    logger.error(f"补全详情异常 | item_id={item_id}: {e}")
+                await asyncio.sleep(0.5)
+
+        await asyncio.gather(*[fetch_one(item_id) for item_id in item_ids], return_exceptions=True)
 
     async def _increment_bargain(self, chat_id: str):
         async with AsyncSessionLocal() as db:
@@ -280,9 +327,15 @@ class XianyuLive:
                 mode = self.toggle_manual_mode(chat_id)
                 logger.info(f"{'🔴 已接管' if mode == 'manual' else '🟢 已恢复'} 会话 {chat_id}")
                 return
-            conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id)
-            await self._add_message(conv.id, "assistant", send_message)
-            logger.debug(f"自己发送的消息已记录 | chat_id={chat_id}")
+            # 仅当会话已存在（买家先发过）时追加；否则不凭空创建脏会话（user_id/nickname 无从知道）。
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(Conversation).where(Conversation.chat_id == chat_id))
+                conv = result.scalar_one_or_none()
+            if conv:
+                await self._add_message(conv.id, "assistant", send_message)
+                logger.debug(f"自己发送的消息已记录 | chat_id={chat_id}")
+            else:
+                logger.debug(f"卖家先发起，会话尚未存在，跳过记录 | chat_id={chat_id}, item_id={item_id}")
             return
 
         logger.info(f"收到用户消息 | 会话: {chat_id}, 用户: {send_user_id}, 商品: {item_id}, 内容: {send_message}")
@@ -369,8 +422,14 @@ class XianyuLive:
                     await self.token_mgr.refresh()
                     logger.info("Token刷新完成")
                 if not self.token_mgr.current_token:
-                    logger.error("无法获取Token，等待重试...")
-                    await asyncio.sleep(30)
+                    remaining = int(self.apis.risk_control_until - time.time())
+                    if remaining > 0:
+                        wait = min(remaining + 5, 120)
+                        logger.error(f"风控冷却中，剩余 {remaining}s，本轮等待 {wait}s 后再检查")
+                        await asyncio.sleep(wait)
+                    else:
+                        logger.error("无法获取Token，等待重试...")
+                        await asyncio.sleep(30)
                     continue
 
                 headers = {

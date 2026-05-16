@@ -6,16 +6,28 @@ from loguru import logger
 from common.utils import generate_sign
 
 
+RISK_CONTROL_COOLDOWN = 600  # 触发风控后的冷却秒数（10分钟）
+
+
 class XianyuApis:
     def __init__(self, cookies_str: str):
         self.cookies_str = cookies_str
         self.cookies = self._parse_cookies(cookies_str)
+        self.risk_control_until: float = 0.0
         self._headers = {
             "accept": "application/json",
             "origin": "https://www.goofish.com",
             "referer": "https://www.goofish.com/",
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
         }
+
+    def _in_cooldown(self) -> int:
+        remaining = int(self.risk_control_until - time.time())
+        return remaining if remaining > 0 else 0
+
+    def _trip_risk_control(self, ret_value):
+        self.risk_control_until = time.time() + RISK_CONTROL_COOLDOWN
+        logger.error(f"触发风控，进入 {RISK_CONTROL_COOLDOWN}s 冷却: {ret_value}")
 
     def _parse_cookies(self, cookies_str: str) -> dict:
         cookies = {}
@@ -29,6 +41,10 @@ class XianyuApis:
         return "; ".join(f"{k}={v}" for k, v in self.cookies.items())
 
     async def get_token(self, device_id: str, retry_count: int = 0) -> dict | None:
+        remaining = self._in_cooldown()
+        if remaining > 0:
+            logger.warning(f"风控冷却中，跳过 token 请求，剩余 {remaining}s")
+            return None
         if retry_count >= 3:
             login_ok = await self.has_login()
             if login_ok:
@@ -68,7 +84,7 @@ class XianyuApis:
 
         error_msg = str(ret_value)
         if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
-            logger.error(f"触发风控: {ret_value}")
+            self._trip_risk_control(ret_value)
             return None
 
         logger.warning(f"Token API调用失败: {ret_value}")
@@ -89,6 +105,9 @@ class XianyuApis:
         return res.get("content", {}).get("success", False)
 
     async def get_item_info(self, item_id: str, retry_count: int = 0) -> dict:
+        remaining = self._in_cooldown()
+        if remaining > 0:
+            return {"error": f"风控冷却中，剩余 {remaining}s"}
         if retry_count >= 3:
             return {"error": "获取商品信息失败"}
 
@@ -118,10 +137,17 @@ class XianyuApis:
             ret_value = res.get("ret", [])
             if any("SUCCESS" in r for r in ret_value):
                 return res
+            error_msg = str(ret_value)
+            if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
+                self._trip_risk_control(ret_value)
+                return {"error": f"风控: {ret_value}"}
         return await self.get_item_info(item_id, retry_count + 1)
 
     async def get_item_list_info(self, user_id: str, page_number: int = 1, page_size: int = 20, retry_count: int = 0) -> dict:
         """获取卖家自己发布的商品列表（mtop.idle.web.xyh.item.list）。"""
+        remaining = self._in_cooldown()
+        if remaining > 0:
+            return {"error": f"风控冷却中，剩余 {remaining}s"}
         if retry_count >= 3:
             return {"error": "获取商品列表失败，重试次数过多"}
 
@@ -168,7 +194,7 @@ class XianyuApis:
 
         error_msg = str(ret_value)
         if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
-            logger.error(f"获取商品列表触发风控: {ret_value}")
+            self._trip_risk_control(ret_value)
             return {"error": f"风控: {ret_value}"}
 
         logger.warning(f"商品列表API调用失败 page={page_number}: {ret_value}")
