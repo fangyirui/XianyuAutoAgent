@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings
 
-DB_OVERRIDABLE_KEYS = ("API_KEY", "MODEL_BASE_URL", "MODEL_NAME")
+DB_OVERRIDABLE_KEYS = ("API_KEY", "MODEL_BASE_URL", "MODEL_NAME", "SKIP_KEYWORDS")
 
 
 class Settings(BaseSettings):
@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     MESSAGE_EXPIRE_TIME: int = 300000
     TOGGLE_KEYWORDS: str = "。"
     SIMULATE_HUMAN_TYPING: bool = False
+    SKIP_KEYWORDS: str = "快给ta一个评价吧,有蚂蚁森林能量可领"
 
     WEBSOCKET_SERVICE_URL: str = "http://localhost:8090"
     BACKEND_WEB_URL: str = "http://localhost:8089"

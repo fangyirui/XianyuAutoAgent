@@ -26,6 +26,7 @@ class EnvConfigResponse(BaseModel):
     MODEL_BASE_URL: str = ""
     MODEL_NAME: str = ""
     COOKIES_STR: str = ""
+    SKIP_KEYWORDS: str = ""
 
 
 class EnvConfigUpdate(BaseModel):
@@ -33,6 +34,7 @@ class EnvConfigUpdate(BaseModel):
     MODEL_BASE_URL: Optional[str] = None
     MODEL_NAME: Optional[str] = None
     COOKIES_STR: Optional[str] = None
+    SKIP_KEYWORDS: Optional[str] = None
 
 
 class AiTestRequest(BaseModel):
@@ -58,6 +60,7 @@ async def get_env_config(db: AsyncSession = Depends(get_db)):
         MODEL_BASE_URL=db_values.get("MODEL_BASE_URL") or settings.MODEL_BASE_URL,
         MODEL_NAME=db_values.get("MODEL_NAME") or settings.MODEL_NAME,
         COOKIES_STR=cookies_str,
+        SKIP_KEYWORDS=db_values.get("SKIP_KEYWORDS") or settings.SKIP_KEYWORDS,
     )
 
 

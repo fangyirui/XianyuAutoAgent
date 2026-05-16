@@ -33,3 +33,11 @@ async def toggle_manual(chat_id: str):
         return {"error": "not_running"}
     mode = _live_instance.toggle_manual_mode(chat_id)
     return {"chat_id": chat_id, "mode": mode}
+
+
+@router.post("/sync-items")
+async def sync_items():
+    if not _live_instance:
+        return {"error": "not_running"}
+    saved = await _live_instance.sync_my_items()
+    return {"status": "ok", "saved": saved, "seller_id": str(_live_instance.myid)}

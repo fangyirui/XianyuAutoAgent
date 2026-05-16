@@ -43,6 +43,7 @@ class XianyuLive:
         self.message_expire_time = settings.MESSAGE_EXPIRE_TIME
         self.toggle_keywords = settings.TOGGLE_KEYWORDS
         self.simulate_human_typing = settings.SIMULATE_HUMAN_TYPING
+        self.skip_keywords = [k.strip() for k in settings.SKIP_KEYWORDS.split(",") if k.strip()]
         self._stopped = False
 
     @property
@@ -101,34 +102,102 @@ class XianyuLive:
             return [{"role": m.role, "content": m.content} for m in result.scalars().all()]
 
     async def _get_item_cache(self, item_id: str) -> dict | None:
+        """只在缓存含完整 itemDO（带 soldPrice）时返回；只有列表数据时返回 None 以触发详情补全。"""
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(ItemCache).where(ItemCache.item_id == item_id))
             row = result.scalar_one_or_none()
-            if row and row.raw_json:
+            if row and row.raw_json and "soldPrice" in row.raw_json:
                 return row.raw_json
             return None
 
+    async def _is_my_item(self, item_id: str) -> bool:
+        """item_cache 表里是否存在归属于当前卖家的此商品。"""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(ItemCache.id).where(
+                    ItemCache.item_id == item_id,
+                    ItemCache.seller_id == str(self.myid),
+                )
+            )
+            return result.scalar_one_or_none() is not None
+
     async def _save_item_cache(self, item_id: str, data: dict):
+        """写入/更新 itemDO 详情；seller_id 一律使用当前账号 unb。"""
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(ItemCache).where(ItemCache.item_id == item_id))
             row = result.scalar_one_or_none()
-            seller_id = str(data.get("userId", "") or data.get("sellerId", "") or data.get("user_id", ""))
+            try:
+                price = float(data.get("soldPrice", 0))
+            except (ValueError, TypeError):
+                price = 0.0
             if row:
                 row.raw_json = data
-                row.title = data.get("title", "")
-                row.price = float(data.get("soldPrice", 0))
-                row.description = data.get("desc", "")
-                if seller_id:
-                    row.seller_id = seller_id
+                row.title = data.get("title", "") or row.title
+                if price > 0:
+                    row.price = price
+                row.description = data.get("desc", "") or row.description
+                row.seller_id = str(self.myid)
             else:
                 db.add(ItemCache(
                     item_id=item_id, raw_json=data,
                     title=data.get("title", ""),
-                    price=float(data.get("soldPrice", 0)),
+                    price=price,
                     description=data.get("desc", ""),
-                    seller_id=seller_id or None,
+                    seller_id=str(self.myid),
                 ))
             await db.commit()
+
+    async def _batch_save_items_from_list(self, items: list) -> int:
+        """把商品列表接口返回的 cardData 批量保存到 item_cache。"""
+        if not items:
+            return 0
+        saved = 0
+        async with AsyncSessionLocal() as db:
+            for it in items:
+                item_id = str(it.get("id", ""))
+                if not item_id or item_id.startswith("auto_"):
+                    continue
+                title = it.get("title", "") or ""
+                price_str = (it.get("priceInfo") or {}).get("price", "0")
+                try:
+                    price = float(price_str)
+                except (ValueError, TypeError):
+                    price = 0.0
+
+                result = await db.execute(select(ItemCache).where(ItemCache.item_id == item_id))
+                row = result.scalar_one_or_none()
+                if row:
+                    if title:
+                        row.title = title
+                    if price > 0:
+                        row.price = price
+                    row.seller_id = str(self.myid)
+                    if not row.raw_json or "soldPrice" not in row.raw_json:
+                        row.raw_json = it
+                else:
+                    db.add(ItemCache(
+                        item_id=item_id,
+                        raw_json=it,
+                        title=title,
+                        price=price,
+                        description="",
+                        seller_id=str(self.myid),
+                    ))
+                saved += 1
+            await db.commit()
+        return saved
+
+    async def sync_my_items(self) -> int:
+        """通过 mtop.idle.web.xyh.item.list 拉取卖家所有商品，建立归属表。"""
+        logger.info(f"开始同步商品列表 | seller={self.myid}")
+        try:
+            items = await self.apis.get_all_items(self.myid, page_size=20)
+        except Exception as e:
+            logger.error(f"同步商品列表失败: {e}")
+            return 0
+        saved = await self._batch_save_items_from_list(items)
+        logger.info(f"商品同步完成 | seller={self.myid}, 拉取={len(items)}条, 保存={saved}条")
+        return saved
 
     async def _increment_bargain(self, chat_id: str):
         async with AsyncSessionLocal() as db:
@@ -218,6 +287,11 @@ class XianyuLive:
 
         logger.info(f"收到用户消息 | 会话: {chat_id}, 用户: {send_user_id}, 商品: {item_id}, 内容: {send_message}")
 
+        matched_kw = next((kw for kw in self.skip_keywords if kw in send_message), None)
+        if matched_kw:
+            logger.info(f"命中跳过关键词「{matched_kw}」，不记录、不回复 | chat_id={chat_id}")
+            return
+
         if self.is_manual_mode(chat_id):
             conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
             await self._add_message(conv.id, "user", send_message)
@@ -228,25 +302,22 @@ class XianyuLive:
             logger.debug(f"系统方括号消息，跳过: {send_message}")
             return
 
+        # 归属校验：商品不在当前卖家的商品库里，说明这是别人的商品（自己以买家身份的会话），跳过自动回复。
+        if not await self._is_my_item(item_id):
+            logger.info(f"商品 {item_id} 不属于当前卖家 {self.myid}，跳过自动回复 | chat_id={chat_id}")
+            return
+
         item_info = await self._get_item_cache(item_id)
         if not item_info:
-            logger.info(f"商品缓存未命中，调用API | item_id={item_id}")
+            logger.info(f"商品详情未命中，调用详情API补全 | item_id={item_id}")
             api_result = await self.apis.get_item_info(item_id)
             if "data" in api_result and "itemDO" in api_result["data"]:
                 item_info = api_result["data"]["itemDO"]
                 await self._save_item_cache(item_id, item_info)
-                logger.info(f"商品信息已缓存 | item_id={item_id}, title={item_info.get('title', '')}")
+                logger.info(f"商品详情已缓存 | item_id={item_id}, title={item_info.get('title', '')}")
             else:
-                logger.warning(f"获取商品信息失败 | item_id={item_id}, response_keys={list(api_result.keys())}")
+                logger.warning(f"获取商品详情失败 | item_id={item_id}, response_keys={list(api_result.keys())}")
                 return
-
-        # 检查商品是否属于当前卖家
-        item_owner = str(item_info.get("userId", "") or item_info.get("sellerId", "") or item_info.get("user_id", ""))
-        if not item_owner:
-            logger.debug(f"商品信息中未找到卖家ID字段 | item_id={item_id}, keys={list(item_info.keys())}")
-        elif item_owner != str(self.myid):
-            logger.debug(f"商品不属于当前卖家，跳过AI回复 | item_id={item_id}, owner={item_owner}, myid={self.myid}")
-            return
 
         conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
         context = await self._get_context(conv.id)

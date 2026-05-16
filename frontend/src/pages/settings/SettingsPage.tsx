@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import { getPrompts, updatePrompt, getEnvConfig, updateEnvConfig, testAiConnection } from '@/api/config'
 import QrLoginModal from '@/components/QrLoginModal'
 
-type Tab = 'cookie' | 'ai' | 'prompts'
+type Tab = 'cookie' | 'ai' | 'prompts' | 'filter'
 interface Prompt { name: string; content: string }
-interface EnvConfig { API_KEY: string; MODEL_BASE_URL: string; MODEL_NAME: string; COOKIES_STR: string }
+interface EnvConfig { API_KEY: string; MODEL_BASE_URL: string; MODEL_NAME: string; COOKIES_STR: string; SKIP_KEYWORDS: string }
 
 const PROMPT_LABELS: Record<string, string> = {
   classify_prompt: '意图分类',
@@ -15,7 +15,7 @@ const PROMPT_LABELS: Record<string, string> = {
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('cookie')
-  const [env, setEnv] = useState<EnvConfig>({ API_KEY: '', MODEL_BASE_URL: '', MODEL_NAME: '', COOKIES_STR: '' })
+  const [env, setEnv] = useState<EnvConfig>({ API_KEY: '', MODEL_BASE_URL: '', MODEL_NAME: '', COOKIES_STR: '', SKIP_KEYWORDS: '' })
   const [cookieInput, setCookieInput] = useState('')
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null)
@@ -73,10 +73,20 @@ export default function SettingsPage() {
     setSaving(false)
   }
 
+  const handleSaveFilter = async () => {
+    setSaving(true)
+    await updateEnvConfig({ SKIP_KEYWORDS: env.SKIP_KEYWORDS })
+    showMsg('过滤词已保存，服务正在重载')
+    const fresh = await getEnvConfig()
+    setEnv(fresh)
+    setSaving(false)
+  }
+
   const tabs: { key: Tab; label: string }[] = [
     { key: 'cookie', label: 'Cookie 设置' },
     { key: 'ai', label: 'AI 配置' },
     { key: 'prompts', label: '提示词编辑' },
+    { key: 'filter', label: '消息过滤' },
   ]
 
   return (
@@ -161,6 +171,24 @@ export default function SettingsPage() {
               {saving ? '保存中...' : '保存'}
             </button>
           </div>
+        </div>
+      )}
+
+      {tab === 'filter' && (
+        <div className="space-y-4 max-w-xl">
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">跳过关键词</label>
+            <textarea value={env.SKIP_KEYWORDS} onChange={(e) => setEnv({ ...env, SKIP_KEYWORDS: e.target.value })} rows={6}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm font-mono resize-none focus:outline-none focus:border-emerald-400" />
+            <p className="mt-2 text-xs text-gray-500 leading-relaxed">
+              多个关键词用英文逗号分隔；命中任一关键词（子串匹配）的买家消息将被直接忽略，不写入对话历史也不调用 AI。
+              <br />常用：<span className="font-mono text-gray-400">快给ta一个评价吧,有蚂蚁森林能量可领</span>
+            </p>
+          </div>
+          <button onClick={handleSaveFilter} disabled={saving}
+            className="px-4 py-2 bg-emerald-500 text-gray-900 font-semibold rounded-lg text-sm hover:bg-emerald-400 disabled:opacity-50">
+            {saving ? '保存中...' : '保存'}
+          </button>
         </div>
       )}
 

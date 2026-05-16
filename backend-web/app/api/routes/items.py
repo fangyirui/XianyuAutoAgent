@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends, Query
+import aiohttp
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
+from common.core import settings
 from common.db import get_db
 from common.models import ItemCache, Seller
 from app.api.deps import get_current_user
@@ -54,3 +56,15 @@ async def list_items(
         })
 
     return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.post("/sync")
+async def sync_items():
+    """手动触发 websocket 服务从闲鱼拉取卖家商品列表并入库。"""
+    url = f"{settings.WEBSOCKET_SERVICE_URL}/api/control/sync-items"
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(url) as resp:
+            if resp.status != 200:
+                raise HTTPException(status_code=resp.status, detail="WebSocket service error")
+            return await resp.json()
