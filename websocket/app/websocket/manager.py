@@ -140,6 +140,7 @@ class XianyuLive:
                 row.description = data.get("desc", "") or row.description
                 row.seller_id = str(self.myid)
                 row.fetched_at = now
+                # NOTE: 不要写 row.custom_prompt —— 用户在管理后台手工配置的提示词必须保留
             else:
                 db.add(ItemCache(
                     item_id=item_id, raw_json=data,
@@ -180,6 +181,7 @@ class XianyuLive:
                     if not row.raw_json or "soldPrice" not in row.raw_json:
                         row.raw_json = it
                     row.fetched_at = now
+                    # NOTE: 不要写 row.custom_prompt —— 用户在管理后台手工配置的提示词必须保留
                 else:
                     db.add(ItemCache(
                         item_id=item_id,
