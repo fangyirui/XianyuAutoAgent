@@ -1,33 +1,58 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Settings, MessageSquare, ScrollText, Package, LogOut } from 'lucide-react'
+import { LayoutDashboard, Settings, MessageSquare, ScrollText, Package, LogOut, Bot } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '仪表盘' },
   { to: '/runtime-logs', icon: ScrollText, label: '运行日志' },
   { to: '/logs', icon: MessageSquare, label: '对话日志' },
-  { to: '/items', icon: Package, label: '商品缓存' },
+  { to: '/items', icon: Package, label: '商品配置' },
   { to: '/settings', icon: Settings, label: '设置' },
 ]
 
 export default function Sidebar() {
   const logout = useAuthStore((s) => s.logout)
   return (
-    <aside className="w-56 bg-gray-800 border-r border-gray-700 flex flex-col">
-      <div className="p-4 border-b border-gray-700">
-        <h1 className="text-lg font-semibold text-emerald-400">XianyuAutoAgent</h1>
+    <aside className="fixed left-0 top-0 z-30 hidden lg:flex h-screen w-64 flex-col bg-dark-900/90 backdrop-blur-xl border-r border-dark-700/60">
+      {/* Brand */}
+      <div className="flex items-center gap-3 px-5 py-5 border-b border-dark-700/60">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-primary shadow-glow">
+          <Bot size={20} className="text-white" />
+        </div>
+        <div className="flex flex-col leading-tight">
+          <span className="text-base font-bold text-gray-50">XianyuAutoAgent</span>
+          <span className="text-xs text-dark-400">闲鱼自动客服</span>
+        </div>
       </div>
-      <nav className="flex-1 p-2 space-y-1">
+
+      {/* Nav */}
+      <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+        <div className="px-2 pt-2 pb-1 text-[11px] uppercase tracking-wider text-dark-400">
+          导航
+        </div>
         {navItems.map(({ to, icon: Icon, label }) => (
-          <NavLink key={to} to={to} end={to === '/'}
-            className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-lg text-sm ${isActive ? 'bg-gray-700 text-emerald-400' : 'text-gray-300 hover:bg-gray-700/50'}`}>
-            <Icon size={18} />{label}
+          <NavLink
+            key={to}
+            to={to}
+            end={to === '/'}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'sidebar-link-active' : ''}`}
+          >
+            <Icon size={18} className="flex-shrink-0" />
+            <span>{label}</span>
           </NavLink>
         ))}
       </nav>
-      <button onClick={logout} className="flex items-center gap-3 px-5 py-3 text-sm text-gray-400 hover:text-red-400 border-t border-gray-700">
-        <LogOut size={18} />退出登录
-      </button>
+
+      {/* Footer */}
+      <div className="border-t border-dark-700/60 p-3">
+        <button
+          onClick={logout}
+          className="sidebar-link w-full text-dark-400 hover:text-red-400 hover:bg-red-500/10"
+        >
+          <LogOut size={18} className="flex-shrink-0" />
+          <span>退出登录</span>
+        </button>
+      </div>
     </aside>
   )
 }
