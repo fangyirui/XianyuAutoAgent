@@ -37,6 +37,15 @@ async def lifespan(app: FastAPI):
             await conn.execute(text(
                 "ALTER TABLE conversations ADD COLUMN user_nickname VARCHAR(128) DEFAULT NULL AFTER user_id"
             ))
+        # item_cache 表补加 custom_prompt 列（商品级额外AI提示词）
+        cp_col_exists = (await conn.execute(text("""
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'item_cache' AND COLUMN_NAME = 'custom_prompt'
+        """))).scalar()
+        if cp_col_exists == 0:
+            await conn.execute(text(
+                "ALTER TABLE item_cache ADD COLUMN custom_prompt TEXT NULL COMMENT '该商品的额外AI提示词' AFTER description"
+            ))
     yield
 
 
