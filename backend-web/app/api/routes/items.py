@@ -53,6 +53,7 @@ async def list_items(
             "title": r.title or "",
             "price": float(r.price) if r.price else 0,
             "description": r.description or "",
+            "custom_prompt": r.custom_prompt or "",
             "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
         })
 
@@ -69,3 +70,34 @@ async def sync_items():
             if resp.status != 200:
                 raise HTTPException(status_code=resp.status, detail="WebSocket service error")
             return await resp.json()
+
+
+from pydantic import BaseModel
+
+
+class ItemPromptUpdate(BaseModel):
+    custom_prompt: str
+
+
+@router.patch("/{item_id}")
+async def update_item_prompt(
+    item_id: str,
+    payload: ItemPromptUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    # 仅允许修改当前活跃卖家名下的商品
+    seller_result = await db.execute(select(Seller.user_id).where(Seller.is_active.is_(True)))
+    seller_ids = [r[0] for r in seller_result.all()]
+
+    query = select(ItemCache).where(ItemCache.item_id == item_id)
+    if seller_ids:
+        query = query.where(ItemCache.seller_id.in_(seller_ids))
+
+    result = await db.execute(query)
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="商品不存在或无权限修改")
+
+    item.custom_prompt = payload.custom_prompt or None
+    await db.commit()
+    return {"ok": True, "custom_prompt": item.custom_prompt or ""}
