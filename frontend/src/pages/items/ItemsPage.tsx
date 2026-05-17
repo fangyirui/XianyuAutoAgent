@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getItems, syncItems } from '@/api/items'
+import { getItems, syncItems, updateItemPrompt } from '@/api/items'
 
 interface Item {
   id: number
@@ -8,6 +8,7 @@ interface Item {
   title: string
   price: number
   description: string
+  custom_prompt: string
   fetched_at: string | null
 }
 
@@ -22,6 +23,10 @@ export default function ItemsPage() {
   const [syncMsg, setSyncMsg] = useState('')
   const [error, setError] = useState('')
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
+  const [editingPromptId, setEditingPromptId] = useState<number | null>(null)
+  const [promptDraft, setPromptDraft] = useState('')
+  const [savingPromptId, setSavingPromptId] = useState<number | null>(null)
+  const [promptErr, setPromptErr] = useState('')
   const pageSize = 20
 
   const toggleExpand = (id: number) => {
@@ -67,6 +72,33 @@ export default function ItemsPage() {
     }
   }
 
+  const startEditPrompt = (item: Item) => {
+    setEditingPromptId(item.id)
+    setPromptDraft(item.custom_prompt || '')
+    setPromptErr('')
+  }
+
+  const cancelEditPrompt = () => {
+    setEditingPromptId(null)
+    setPromptDraft('')
+    setPromptErr('')
+  }
+
+  const savePrompt = async (item: Item) => {
+    setSavingPromptId(item.id)
+    setPromptErr('')
+    try {
+      const res = await updateItemPrompt(item.item_id, promptDraft)
+      setItems((prev) => prev.map((it) => it.id === item.id ? { ...it, custom_prompt: res.custom_prompt ?? promptDraft } : it))
+      setEditingPromptId(null)
+      setPromptDraft('')
+    } catch (e: any) {
+      setPromptErr(e?.response?.data?.detail || '保存失败')
+    } finally {
+      setSavingPromptId(null)
+    }
+  }
+
   const totalPages = Math.ceil(total / pageSize)
 
   return (
@@ -79,7 +111,7 @@ export default function ItemsPage() {
         </button>
       </div>
       <p className="text-sm text-gray-400">
-        已缓存 {total} 件归属于当前卖家的商品。点击右上角按钮从闲鱼拉取最新商品列表（"在售"分组）。
+        已缓存 {total} 件归属于当前卖家的商品。点击右上角按钮从闲鱼拉取最新商品列表（"在售"分组）。可单独为某商品配置"AI 提示词"，AI 生成回复时会作为系统提示词的补充。
       </p>
 
       <div className="flex gap-2">
@@ -113,6 +145,7 @@ export default function ItemsPage() {
                 <th className="text-left py-2 px-3">标题</th>
                 <th className="text-right py-2 px-3">价格</th>
                 <th className="text-left py-2 px-3">描述</th>
+                <th className="text-left py-2 px-3">AI 提示词</th>
                 <th className="text-left py-2 px-3">缓存时间</th>
               </tr>
             </thead>
@@ -120,6 +153,9 @@ export default function ItemsPage() {
               {items.map((item) => {
                 const expanded = expandedIds.has(item.id)
                 const hasDesc = !!item.description
+                const editing = editingPromptId === item.id
+                const saving = savingPromptId === item.id
+                const hasPrompt = !!(item.custom_prompt && item.custom_prompt.trim())
                 return (
                   <tr key={item.id} className="border-b border-gray-700/50 hover:bg-gray-800/50 align-top">
                     <td className="py-2 px-3 font-mono text-xs text-gray-400 whitespace-nowrap">{item.item_id}</td>
@@ -137,6 +173,57 @@ export default function ItemsPage() {
                           {item.description}
                         </>
                       ) : '-'}
+                    </td>
+                    <td className="py-2 px-3 max-w-md text-xs">
+                      {editing ? (
+                        <div className="space-y-2">
+                          <textarea
+                            value={promptDraft}
+                            onChange={(e) => setPromptDraft(e.target.value)}
+                            maxLength={2000}
+                            rows={4}
+                            className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-gray-200 focus:outline-none focus:border-emerald-400"
+                            placeholder="为该商品单独配置额外提示词（可空），AI 生成回复时追加在系统提示词之后"
+                          />
+                          <div className="flex gap-2 items-center">
+                            <button
+                              onClick={() => savePrompt(item)}
+                              disabled={saving}
+                              className="px-3 py-1 bg-emerald-500 text-gray-900 font-semibold rounded text-xs hover:bg-emerald-400 disabled:opacity-50"
+                            >
+                              {saving ? '保存中...' : '保存'}
+                            </button>
+                            <button
+                              onClick={cancelEditPrompt}
+                              disabled={saving}
+                              className="px-3 py-1 bg-gray-700 text-gray-200 rounded text-xs hover:bg-gray-600 disabled:opacity-50"
+                            >
+                              取消
+                            </button>
+                            <span className="text-gray-500">{promptDraft.length}/2000</span>
+                          </div>
+                          {promptErr && <div className="text-red-400 text-xs">{promptErr}</div>}
+                        </div>
+                      ) : (
+                        <div
+                          onClick={() => startEditPrompt(item)}
+                          className="cursor-pointer select-none text-gray-300 hover:text-emerald-300"
+                          title="点击编辑"
+                        >
+                          {hasPrompt ? (
+                            <>
+                              <span className="mr-1 text-gray-500">✎</span>
+                              <span className="break-words">
+                                {item.custom_prompt.length > 20
+                                  ? `${item.custom_prompt.slice(0, 20)}...`
+                                  : item.custom_prompt}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-gray-500">未设置（点击配置）</span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2 px-3 text-xs text-gray-500 whitespace-nowrap">{item.fetched_at ? new Date(item.fetched_at).toLocaleString('zh-CN') : '-'}</td>
                   </tr>
