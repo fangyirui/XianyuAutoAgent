@@ -1,11 +1,19 @@
+from typing import Optional
 from loguru import logger
 from .base import BaseAgent
 from common.core import settings
 
 
 class TechAgent(BaseAgent):
-    async def generate(self, user_msg: str, item_desc: str, context: str, bargain_count: int = 0) -> str:
-        messages = self._build_messages(user_msg, item_desc, context)
+    async def generate(
+        self,
+        user_msg: str,
+        item_desc: str,
+        context: str,
+        bargain_count: int = 0,
+        item_custom_prompt: Optional[str] = None,
+    ) -> str:
+        messages = self._build_messages(user_msg, item_desc, context, item_custom_prompt)
 
         logger.info(f"[TechAgent] LLM请求 | model={settings.MODEL_NAME}, enable_search=True")
         logger.debug(f"[TechAgent] 完整提示词:\n{messages[0]['content']}")

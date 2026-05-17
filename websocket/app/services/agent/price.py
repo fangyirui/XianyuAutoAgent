@@ -1,13 +1,21 @@
-from typing import List, Dict
+from typing import Optional
 from loguru import logger
 from .base import BaseAgent
 from common.core import settings
 
 
 class PriceAgent(BaseAgent):
-    async def generate(self, user_msg: str, item_desc: str, context: str, bargain_count: int = 0) -> str:
+    async def generate(
+        self,
+        user_msg: str,
+        item_desc: str,
+        context: str,
+        bargain_count: int = 0,
+        item_custom_prompt: Optional[str] = None,
+    ) -> str:
         dynamic_temp = self._calc_temperature(bargain_count)
-        messages = self._build_messages(user_msg, item_desc, context)
+        messages = self._build_messages(user_msg, item_desc, context, item_custom_prompt)
+        # ▲议价轮次 永远追加到 system content 末尾（在 custom_prompt 之后），与原行为保持一致
         messages[0]["content"] += f"\n▲当前议价轮次：{bargain_count}"
 
         logger.info(f"[PriceAgent] LLM请求 | model={settings.MODEL_NAME}, temp={dynamic_temp}, 议价轮次={bargain_count}")
