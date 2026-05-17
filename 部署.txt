@@ -1,30 +1,30 @@
- # 1. 安装 Docker
-  curl -fsSL https://get.docker.com | sh
-  systemctl enable docker && systemctl start docker
+服务器部署（推荐）
 
-  # 2. 安装 docker-compose
-  apt install docker-compose -y
+# 1. 安装 Docker
+curl -fsSL https://get.docker.com | sh
+systemctl enable docker && systemctl start docker
 
-  # 3. 拉取代码
-  git clone https://github.com/fangyirui/XianyuAutoAgent.git
-  cd XianyuAutoAgent
+# 2. 拉取代码
+git clone https://github.com/fangyirui/XianyuAutoAgent.git
+cd XianyuAutoAgent
 
-  # 4. 配置环境变量
-  cp .env.example .env
-  vim .env   # 填入 API_KEY 和 COOKIES_STR
+# 3. 配置环境变量
+cp .env.example .env
+vim .env   # 填 API_KEY、COOKIES_STR、MODEL_BASE_URL、MODEL_NAME 等
 
-  # 5. 准备自定义提示词（可选，不做则用默认）
-  cp prompts/classify_prompt_example.txt prompts/classify_prompt.txt
-  cp prompts/price_prompt_example.txt prompts/price_prompt.txt
-  cp prompts/tech_prompt_example.txt prompts/tech_prompt.txt
-  cp prompts/default_prompt_example.txt prompts/default_prompt.txt
+# 4. 一键启动全部服务
+docker compose up -d --build
 
-  # 6. 启动
-  docker compose up -d
-  或者
-  docker compose restart
+# 5. 查看日志
+docker compose logs -f websocket      # 闲鱼 WS 服务
+docker compose logs -f backend-web    # 后台 API
+docker compose logs -f frontend       # 前端
 
-  docker compose up -d --build
+端口
 
-  # 7. 查看日志
-  docker logs -f xianyuautoagent
+- 80 — 前端（Web 控制台，浏览器访问 http://服务器IP/）
+- 8089 — 后端 API/
+- 8090 — WebSocket 服务
+- 3306 / 6379 — MySQL / Redis（仅内网用，生产环境建议关掉对外端口）
+
+SELECT key_name, HEX(value) FROM system_config WHERE key_name='SKIP_KEYWORDS';SHOW VARIABLES LIKE 'character_set%';
