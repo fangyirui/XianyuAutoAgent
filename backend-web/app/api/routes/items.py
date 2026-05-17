@@ -7,6 +7,7 @@ from common.db import get_db
 from common.models import ItemCache, Seller
 from app.api.deps import get_current_user
 from typing import List, Optional
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/items", tags=["items"], dependencies=[Depends(get_current_user)])
 
@@ -72,9 +73,6 @@ async def sync_items():
             return await resp.json()
 
 
-from pydantic import BaseModel
-
-
 class ItemPromptUpdate(BaseModel):
     custom_prompt: str
 
@@ -90,6 +88,7 @@ async def update_item_prompt(
     seller_ids = [r[0] for r in seller_result.all()]
 
     query = select(ItemCache).where(ItemCache.item_id == item_id)
+    # 与 GET /items 行为一致：如果没有配置活跃卖家，不做卖家过滤
     if seller_ids:
         query = query.where(ItemCache.seller_id.in_(seller_ids))
 
