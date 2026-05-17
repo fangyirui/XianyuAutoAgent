@@ -111,6 +111,15 @@ class XianyuLive:
                 return row.raw_json
             return None
 
+    async def _get_item_custom_prompt(self, item_id: str) -> str:
+        """读取商品级额外 AI 提示词；不存在或空返回空串。"""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(ItemCache.custom_prompt).where(ItemCache.item_id == item_id)
+            )
+            row = result.first()
+            return (row[0] or "") if row else ""
+
     async def _is_my_item(self, item_id: str) -> bool:
         """item_cache 表里是否存在归属于当前卖家的此商品。"""
         async with AsyncSessionLocal() as db:
@@ -377,8 +386,11 @@ class XianyuLive:
         conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
         context = await self._get_context(conv.id)
         item_desc = f"当前商品的信息如下：{self.build_item_description(item_info)}"
-        logger.info(f"开始生成AI回复 | chat_id={chat_id}, 上下文条数={len(context)}")
-        bot_reply = await self.bot.generate_reply(send_message, item_desc, context)
+        item_custom_prompt = await self._get_item_custom_prompt(item_id)
+        logger.info(f"开始生成AI回复 | chat_id={chat_id}, 上下文条数={len(context)}, 商品额外提示词长度={len(item_custom_prompt)}")
+        bot_reply = await self.bot.generate_reply(
+            send_message, item_desc, context, item_custom_prompt=item_custom_prompt,
+        )
 
         if bot_reply == "-":
             logger.info(f"AI返回'-'，不回复 | chat_id={chat_id}")
