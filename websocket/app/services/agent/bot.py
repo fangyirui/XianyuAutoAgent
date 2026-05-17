@@ -128,12 +128,19 @@ class XianyuReplyBot:
         msgs = [m for m in context if m["role"] in ("user", "assistant")]
         return "\n".join(f"{m['role']}: {m['content']}" for m in msgs)
 
-    async def generate_reply(self, user_msg: str, item_desc: str, context: List[Dict]) -> str:
+    async def generate_reply(
+        self,
+        user_msg: str,
+        item_desc: str,
+        context: List[Dict],
+        item_custom_prompt: str | None = None,
+    ) -> str:
         logger.info(f"[Bot] 开始处理 | 用户消息: {user_msg}")
         logger.debug(f"[Bot] 商品信息: {item_desc}")
-        logger.debug(f"[Bot] 上下文条数: {len(context)}")
+        logger.debug(f"[Bot] 上下文条数: {len(context)}, 商品额外提示词={'有' if item_custom_prompt else '无'}")
 
         formatted_context = self.format_history(context)
+        # IntentRouter / ClassifyAgent 不接收 item_custom_prompt（避免污染意图判断）
         detected_intent = await self.router.detect(user_msg, item_desc, formatted_context)
 
         if detected_intent == "no_reply":
@@ -153,7 +160,11 @@ class XianyuReplyBot:
 
         bargain_count = self._extract_bargain_count(context)
         reply = await agent.generate(
-            user_msg=user_msg, item_desc=item_desc, context=formatted_context, bargain_count=bargain_count
+            user_msg=user_msg,
+            item_desc=item_desc,
+            context=formatted_context,
+            bargain_count=bargain_count,
+            item_custom_prompt=item_custom_prompt,
         )
         logger.info(f"[Bot] 最终回复: {reply}")
         return reply
