@@ -7,6 +7,7 @@ from .core import log_buffer
 
 _live_instance = None
 _live_task = None
+_redis_task = None
 
 
 async def _start_live(app_state=None):
@@ -75,21 +76,50 @@ async def _soft_reload():
 
 async def _redis_subscriber():
     import redis.asyncio as aioredis
-    r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
-    pubsub = r.pubsub()
-    await pubsub.subscribe("config:reload")
-    try:
-        async for msg in pubsub.listen():
-            if msg["type"] != "message":
-                continue
-            data = msg.get("data", "")
-            if data in ("cookie_updated", "qrlogin"):
-                await _reload()
-            else:
-                await _soft_reload()
-    except asyncio.CancelledError:
-        await pubsub.unsubscribe("config:reload")
-        await r.aclose()
+    while True:
+        r = None
+        pubsub = None
+        try:
+            r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            pubsub = r.pubsub()
+            await pubsub.subscribe("config:reload")
+            logger.info("Redis 配置重载订阅已建立")
+            async for msg in pubsub.listen():
+                if msg["type"] != "message":
+                    continue
+                data = msg.get("data", "")
+                try:
+                    if data in ("cookie_updated", "qrlogin"):
+                        await _reload()
+                    else:
+                        await _soft_reload()
+                except Exception as e:
+                    logger.exception(f"处理重载消息失败: {e}")
+        except asyncio.CancelledError:
+            if pubsub is not None:
+                try:
+                    await pubsub.unsubscribe("config:reload")
+                except Exception:
+                    pass
+            if r is not None:
+                try:
+                    await r.aclose()
+                except Exception:
+                    pass
+            raise
+        except Exception as e:
+            logger.warning(f"Redis 订阅异常，5 秒后重连: {e}")
+            if pubsub is not None:
+                try:
+                    await pubsub.aclose()
+                except Exception:
+                    pass
+            if r is not None:
+                try:
+                    await r.aclose()
+                except Exception:
+                    pass
+            await asyncio.sleep(5)
 
 
 def create_app() -> FastAPI:
@@ -102,11 +132,12 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup():
+        global _redis_task
         from common.db import engine
         from common.models import Base
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         await _start_live()
-        asyncio.create_task(_redis_subscriber())
+        _redis_task = asyncio.create_task(_redis_subscriber())
 
     return app
