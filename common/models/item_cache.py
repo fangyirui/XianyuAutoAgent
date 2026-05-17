@@ -11,6 +11,7 @@ class ItemCache(Base):
     title = Column(String(256), nullable=True)
     price = Column(Numeric(10, 2), nullable=True)
     description = Column(Text, nullable=True)
+    custom_prompt = Column(Text, nullable=True, comment="该商品的额外AI提示词")
     raw_json = Column(JSON, nullable=True)
     fetched_at = Column(DateTime, server_default=func.now())
     expired_at = Column(DateTime, nullable=True)

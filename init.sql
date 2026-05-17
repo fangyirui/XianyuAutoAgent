@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS item_cache (
     title VARCHAR(256),
     price DECIMAL(10,2),
     description TEXT,
+    custom_prompt TEXT NULL COMMENT '该商品的额外AI提示词',
     raw_json JSON,
     fetched_at DATETIME DEFAULT NOW(),
     expired_at DATETIME,
