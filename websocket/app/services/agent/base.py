@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 from openai import AsyncOpenAI
 from loguru import logger
 from common.core import settings
@@ -10,18 +10,35 @@ class BaseAgent:
         self.system_prompt = system_prompt
         self.safety_filter = safety_filter
 
-    async def generate(self, user_msg: str, item_desc: str, context: str, bargain_count: int = 0) -> str:
-        messages = self._build_messages(user_msg, item_desc, context)
-        logger.debug(f"[{self.__class__.__name__}] 构建消息完成，system_prompt长度={len(self.system_prompt)}")
+    async def generate(
+        self,
+        user_msg: str,
+        item_desc: str,
+        context: str,
+        bargain_count: int = 0,
+        item_custom_prompt: Optional[str] = None,
+    ) -> str:
+        messages = self._build_messages(user_msg, item_desc, context, item_custom_prompt)
+        logger.debug(f"[{self.__class__.__name__}] 构建消息完成，system_prompt长度={len(self.system_prompt)}, 商品额外提示词={'有' if item_custom_prompt else '无'}")
         response = await self._call_llm(messages)
         filtered = self.safety_filter(response)
         if filtered != response:
             logger.warning(f"[{self.__class__.__name__}] 安全过滤触发，原始回复: {response}")
         return filtered
 
-    def _build_messages(self, user_msg: str, item_desc: str, context: str) -> List[Dict]:
+    def _build_messages(
+        self,
+        user_msg: str,
+        item_desc: str,
+        context: str,
+        item_custom_prompt: Optional[str] = None,
+    ) -> List[Dict]:
+        sys_content = f"【商品信息】{item_desc}\n【你与客户对话历史】{context}\n{self.system_prompt}"
+        # 严格门控：空串 / None / 任何 falsy 值都完全不追加，保证主流程零回归
+        if item_custom_prompt:
+            sys_content += f"\n【针对本商品的特别说明】{item_custom_prompt}"
         return [
-            {"role": "system", "content": f"【商品信息】{item_desc}\n【你与客户对话历史】{context}\n{self.system_prompt}"},
+            {"role": "system", "content": sys_content},
             {"role": "user", "content": user_msg}
         ]
 
