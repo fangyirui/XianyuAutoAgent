@@ -44,23 +44,23 @@ export default function QrLoginModal({ onClose }: Props) {
   useEffect(() => { startLogin(); return stopPolling }, [])
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-gray-800 rounded-xl p-6 w-80 space-y-4" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-lg font-semibold text-center">扫码登录闲鱼</h3>
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 px-4" onClick={onClose}>
+      <div className="glass-card w-full max-w-sm p-6 space-y-4 animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-semibold text-center text-gray-50">扫码登录闲鱼</h3>
 
         <div className="flex justify-center">
-          {status === 'loading' && <div className="w-48 h-48 flex items-center justify-center text-gray-400">加载中...</div>}
+          {status === 'loading' && <div className="w-48 h-48 flex items-center justify-center text-dark-400">加载中…</div>}
           {(status === 'ready' || status === 'scaned') && codeContent && (
-            <div className="bg-white p-3 rounded-lg">
+            <div className="bg-white p-3 rounded-2xl shadow-lg">
               <QRCodeSVG value={codeContent} size={180} />
             </div>
           )}
-          {status === 'confirmed' && <div className="w-48 h-48 flex items-center justify-center text-emerald-400 text-lg">登录成功</div>}
+          {status === 'confirmed' && <div className="w-48 h-48 flex items-center justify-center text-emerald-400 text-lg font-medium">登录成功</div>}
           {status === 'expired' && <div className="w-48 h-48 flex items-center justify-center text-red-400">二维码已过期</div>}
           {status === 'error' && <div className="w-48 h-48 flex items-center justify-center text-red-400 text-sm text-center">{error}</div>}
         </div>
 
-        <p className="text-center text-sm text-gray-400">
+        <p className="text-center text-sm text-dark-400">
           {status === 'ready' && '请使用闲鱼 App 扫描二维码'}
           {status === 'scaned' && '已扫码，请在手机上确认'}
           {status === 'confirmed' && 'Cookie 已自动保存'}
@@ -68,9 +68,9 @@ export default function QrLoginModal({ onClose }: Props) {
 
         <div className="flex justify-center gap-3">
           {(status === 'expired' || status === 'error') && (
-            <button onClick={startLogin} className="px-4 py-2 bg-emerald-500 text-gray-900 font-semibold rounded-lg text-sm">重新获取</button>
+            <button onClick={startLogin} className="btn btn-primary">重新获取</button>
           )}
-          <button onClick={onClose} className="px-4 py-2 bg-gray-700 text-gray-200 rounded-lg text-sm">关闭</button>
+          <button onClick={onClose} className="btn btn-secondary">关闭</button>
         </div>
       </div>
     </div>

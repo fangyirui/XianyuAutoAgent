@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Cookie, Bot, FileText, Filter, QrCode } from 'lucide-react'
 import { getPrompts, updatePrompt, getEnvConfig, updateEnvConfig, testAiConnection } from '@/api/config'
 import QrLoginModal from '@/components/QrLoginModal'
 
@@ -82,112 +83,144 @@ export default function SettingsPage() {
     setSaving(false)
   }
 
-  const tabs: { key: Tab; label: string }[] = [
-    { key: 'cookie', label: 'Cookie 设置' },
-    { key: 'ai', label: 'AI 配置' },
-    { key: 'prompts', label: '提示词编辑' },
-    { key: 'filter', label: '消息过滤' },
+  const tabs: { key: Tab; label: string; icon: typeof Cookie }[] = [
+    { key: 'cookie', label: 'Cookie 设置', icon: Cookie },
+    { key: 'ai', label: 'AI 配置', icon: Bot },
+    { key: 'prompts', label: '提示词编辑', icon: FileText },
+    { key: 'filter', label: '消息过滤', icon: Filter },
   ]
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">设置</h2>
-      {message && <div className={`px-4 py-2 rounded-lg text-sm ${msgType === 'error' ? 'bg-red-900/50 text-red-300' : 'bg-emerald-900/50 text-emerald-300'}`}>{message}</div>}
+    <div className="space-y-5 animate-fade-in">
+      <div>
+        <h2 className="text-2xl font-bold text-gray-50">设置</h2>
+        <p className="text-sm text-dark-400 mt-1">配置闲鱼登录、AI 模型、提示词与过滤规则</p>
+      </div>
 
-      <div className="flex gap-2 border-b border-gray-700 pb-2">
-        {tabs.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`px-4 py-2 rounded-t-lg text-sm ${tab === t.key ? 'bg-gray-700 text-emerald-400' : 'text-gray-400 hover:text-gray-200'}`}>
-            {t.label}
+      {message && (
+        <div className={`rounded-xl px-4 py-2.5 text-sm border ${msgType === 'error' ? 'bg-red-500/10 text-red-300 border-red-500/30' : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'}`}>
+          {message}
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="card !p-1.5 inline-flex flex-wrap gap-1">
+        {tabs.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm transition-all ${
+              tab === key ? 'bg-primary-500/15 text-primary-300' : 'text-dark-300 hover:text-gray-100 hover:bg-dark-800'
+            }`}
+          >
+            <Icon size={15} />
+            {label}
           </button>
         ))}
       </div>
 
+      {/* Cookie */}
       {tab === 'cookie' && (
-        <div className="space-y-4">
+        <div className="card card-body space-y-4 max-w-3xl">
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Cookie 字符串（浏览器 F12 获取）</label>
-            <textarea value={cookieInput} onChange={(e) => setCookieInput(e.target.value)} rows={6}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm font-mono resize-none focus:outline-none focus:border-emerald-400" />
+            <label className="input-label">Cookie 字符串</label>
+            <textarea
+              value={cookieInput}
+              onChange={(e) => setCookieInput(e.target.value)}
+              rows={6}
+              className="input font-mono resize-none"
+              placeholder="浏览器 F12 → 网络/Application 取整段 Cookie 粘贴这里"
+            />
+            <p className="input-hint">保存后 websocket 会自动重连，无需重启容器</p>
           </div>
           <div className="flex gap-3">
-            <button onClick={handleSaveCookie} disabled={saving}
-              className="px-4 py-2 bg-emerald-500 text-gray-900 font-semibold rounded-lg text-sm hover:bg-emerald-400 disabled:opacity-50">
-              {saving ? '保存中...' : '保存 Cookie'}
+            <button onClick={handleSaveCookie} disabled={saving} className="btn btn-primary">
+              {saving ? '保存中…' : '保存 Cookie'}
             </button>
-            <button onClick={() => setShowQr(true)}
-              className="px-4 py-2 bg-gray-700 text-gray-200 rounded-lg text-sm hover:bg-gray-600">
-              扫码登录
+            <button onClick={() => setShowQr(true)} className="btn btn-secondary">
+              <QrCode size={16} />扫码登录
             </button>
           </div>
         </div>
       )}
 
+      {/* AI */}
       {tab === 'ai' && (
-        <div className="space-y-4 max-w-xl">
+        <div className="card card-body space-y-4 max-w-2xl">
           <div>
-            <label className="block text-sm text-gray-400 mb-1">API Key</label>
-            <input value={env.API_KEY} onChange={(e) => setEnv({ ...env, API_KEY: e.target.value })}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-400" />
+            <label className="input-label">API Key</label>
+            <input value={env.API_KEY} onChange={(e) => setEnv({ ...env, API_KEY: e.target.value })} className="input" />
           </div>
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Base URL</label>
-            <input value={env.MODEL_BASE_URL} onChange={(e) => setEnv({ ...env, MODEL_BASE_URL: e.target.value })}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-400" />
+            <label className="input-label">Base URL</label>
+            <input value={env.MODEL_BASE_URL} onChange={(e) => setEnv({ ...env, MODEL_BASE_URL: e.target.value })} className="input" />
+            <p className="input-hint">OpenAI 兼容接口地址，如 https://dashscope.aliyuncs.com/compatible-mode/v1</p>
           </div>
           <div>
-            <label className="block text-sm text-gray-400 mb-1">模型名称</label>
-            <input value={env.MODEL_NAME} onChange={(e) => setEnv({ ...env, MODEL_NAME: e.target.value })}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-400" />
+            <label className="input-label">模型名称</label>
+            <input value={env.MODEL_NAME} onChange={(e) => setEnv({ ...env, MODEL_NAME: e.target.value })} className="input" />
           </div>
           <div className="flex gap-3">
-            <button onClick={handleSaveAi} disabled={saving}
-              className="px-4 py-2 bg-emerald-500 text-gray-900 font-semibold rounded-lg text-sm hover:bg-emerald-400 disabled:opacity-50">
-              {saving ? '保存中...' : '保存'}
+            <button onClick={handleSaveAi} disabled={saving} className="btn btn-primary">
+              {saving ? '保存中…' : '保存'}
             </button>
-            <button onClick={handleTestAi} disabled={aiTesting}
-              className="px-4 py-2 bg-gray-700 text-gray-200 rounded-lg text-sm hover:bg-gray-600 disabled:opacity-50">
-              {aiTesting ? '测试中...' : '测试连接'}
+            <button onClick={handleTestAi} disabled={aiTesting} className="btn btn-secondary">
+              {aiTesting ? '测试中…' : '测试连接'}
             </button>
           </div>
         </div>
       )}
 
+      {/* Prompts */}
       {tab === 'prompts' && (
-        <div className="flex gap-4 h-[calc(100vh-16rem)]">
-          <div className="w-48 space-y-1">
-            {prompts.map((p) => (
-              <button key={p.name} onClick={() => { setSelectedPrompt(p); setPromptEditing(p.content) }}
-                className={`w-full text-left px-3 py-2 rounded-lg text-sm ${selectedPrompt?.name === p.name ? 'bg-gray-700 text-emerald-400' : 'text-gray-300 hover:bg-gray-700/50'}`}>
-                {PROMPT_LABELS[p.name] || p.name}
+        <div className="card card-body">
+          <div className="flex gap-4 h-[calc(100vh-20rem)] min-h-[400px]">
+            <div className="w-48 space-y-1 border-r border-dark-700/60 pr-3">
+              {prompts.map((p) => (
+                <button
+                  key={p.name}
+                  onClick={() => { setSelectedPrompt(p); setPromptEditing(p.content) }}
+                  className={`w-full text-left px-3 py-2 rounded-xl text-sm transition-all ${
+                    selectedPrompt?.name === p.name ? 'bg-primary-500/15 text-primary-300' : 'text-dark-300 hover:bg-dark-800 hover:text-gray-100'
+                  }`}
+                >
+                  {PROMPT_LABELS[p.name] || p.name}
+                </button>
+              ))}
+            </div>
+            <div className="flex-1 flex flex-col">
+              <textarea
+                value={promptEditing}
+                onChange={(e) => setPromptEditing(e.target.value)}
+                className="input flex-1 font-mono resize-none"
+              />
+              <button onClick={handleSavePrompt} disabled={saving} className="btn btn-primary mt-3 self-end">
+                {saving ? '保存中…' : '保存'}
               </button>
-            ))}
-          </div>
-          <div className="flex-1 flex flex-col">
-            <textarea value={promptEditing} onChange={(e) => setPromptEditing(e.target.value)}
-              className="flex-1 bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm font-mono resize-none focus:outline-none focus:border-emerald-400" />
-            <button onClick={handleSavePrompt} disabled={saving}
-              className="mt-3 self-end px-4 py-2 bg-emerald-500 text-gray-900 font-semibold rounded-lg text-sm hover:bg-emerald-400 disabled:opacity-50">
-              {saving ? '保存中...' : '保存'}
-            </button>
+            </div>
           </div>
         </div>
       )}
 
+      {/* Filter */}
       {tab === 'filter' && (
-        <div className="space-y-4 max-w-xl">
+        <div className="card card-body space-y-4 max-w-3xl">
           <div>
-            <label className="block text-sm text-gray-400 mb-1">跳过关键词</label>
-            <textarea value={env.SKIP_KEYWORDS} onChange={(e) => setEnv({ ...env, SKIP_KEYWORDS: e.target.value })} rows={6}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm font-mono resize-none focus:outline-none focus:border-emerald-400" />
-            <p className="mt-2 text-xs text-gray-500 leading-relaxed">
-              多个关键词用英文逗号分隔；命中任一关键词（子串匹配）的买家消息将被直接忽略，不写入对话历史也不调用 AI。
-              <br />常用：<span className="font-mono text-gray-400">快给ta一个评价吧,有蚂蚁森林能量可领</span>
+            <label className="input-label">跳过关键词</label>
+            <textarea
+              value={env.SKIP_KEYWORDS}
+              onChange={(e) => setEnv({ ...env, SKIP_KEYWORDS: e.target.value })}
+              rows={6}
+              className="input font-mono resize-none"
+              placeholder="多个关键词用英文逗号分隔"
+            />
+            <p className="input-hint leading-relaxed">
+              命中任一关键词（子串匹配）的买家消息将被直接忽略，不写入对话历史也不调用 AI。
+              <br />常用：<span className="font-mono text-dark-300">快给ta一个评价吧,有蚂蚁森林能量可领</span>
             </p>
           </div>
-          <button onClick={handleSaveFilter} disabled={saving}
-            className="px-4 py-2 bg-emerald-500 text-gray-900 font-semibold rounded-lg text-sm hover:bg-emerald-400 disabled:opacity-50">
-            {saving ? '保存中...' : '保存'}
+          <button onClick={handleSaveFilter} disabled={saving} className="btn btn-primary">
+            {saving ? '保存中…' : '保存'}
           </button>
         </div>
       )}

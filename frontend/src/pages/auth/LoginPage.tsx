@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Bot, Lock, User } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { login } from '@/api/auth'
 
@@ -27,17 +28,56 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center">
-      <form onSubmit={handleSubmit} className="bg-gray-800 p-8 rounded-xl border border-gray-700 w-80 space-y-4">
-        <h2 className="text-center text-lg font-semibold text-emerald-400">XianyuAutoAgent</h2>
-        <input type="text" placeholder="用户名" value={username} onChange={(e) => setUsername(e.target.value)}
-          className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm focus:outline-none focus:border-emerald-400" />
-        <input type="password" placeholder="密码" value={password} onChange={(e) => setPassword(e.target.value)}
-          className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm focus:outline-none focus:border-emerald-400" />
-        {error && <p className="text-red-400 text-xs text-center">{error}</p>}
-        <button type="submit" disabled={loading}
-          className="w-full py-2 bg-emerald-500 text-gray-900 font-semibold rounded-lg text-sm hover:bg-emerald-400 disabled:opacity-50">
-          {loading ? '登录中...' : '登录'}
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <form onSubmit={handleSubmit} className="glass-card w-full max-w-sm p-8 space-y-5 animate-fade-in">
+        <div className="flex flex-col items-center gap-3 pb-2">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-primary shadow-glow">
+            <Bot size={28} className="text-white" />
+          </div>
+          <div className="text-center">
+            <h1 className="text-xl font-bold text-gray-50">XianyuAutoAgent</h1>
+            <p className="text-xs text-dark-400 mt-1">闲鱼自动客服管理后台</p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="input-label">用户名</label>
+            <div className="relative">
+              <User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="请输入用户名"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="input pl-10"
+                autoFocus
+              />
+            </div>
+          </div>
+          <div>
+            <label className="input-label">密码</label>
+            <div className="relative">
+              <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400 pointer-events-none" />
+              <input
+                type="password"
+                placeholder="请输入密码"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="input pl-10"
+              />
+            </div>
+          </div>
+        </div>
+
+        {error && (
+          <div className="rounded-xl bg-red-500/10 border border-red-500/30 px-3 py-2 text-xs text-red-300 text-center">
+            {error}
+          </div>
+        )}
+
+        <button type="submit" disabled={loading} className="btn btn-primary btn-lg w-full">
+          {loading ? '登录中…' : '登录'}
         </button>
       </form>
     </div>

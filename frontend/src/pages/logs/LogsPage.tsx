@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { MessageSquare } from 'lucide-react'
 import { getConversations, getMessages } from '@/api/logs'
 
 interface Conversation {
@@ -39,56 +40,93 @@ export default function LogsPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">对话日志</h2>
-      <div className="flex gap-4 h-[calc(100vh-12rem)]">
-        <div className="w-80 overflow-auto space-y-1 border-r border-gray-700 pr-4">
-          {conversations.length === 0 && <p className="text-gray-500 text-sm py-4">暂无对话记录</p>}
-          {conversations.map((c) => (
-            <button key={c.chat_id} onClick={() => selectConversation(c)}
-              className={`w-full text-left px-3 py-2.5 rounded-lg text-sm ${selectedChat === c.chat_id ? 'bg-gray-700 text-emerald-400' : 'text-gray-300 hover:bg-gray-700/50'}`}>
-              <div className="flex items-center justify-between">
-                <span className="font-medium truncate max-w-[180px]">{c.item_title || '未知商品'}</span>
-                {c.item_price != null && c.item_price > 0 && (
-                  <span className="text-xs text-emerald-400 shrink-0">¥{c.item_price}</span>
-                )}
-              </div>
-              <p className="text-xs text-gray-400 mt-0.5 truncate">买家: {c.user_nickname || c.user_id}</p>
-              {c.last_message && (
-                <p className="text-xs text-gray-500 mt-1 truncate">{c.last_message}</p>
-              )}
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-xs text-gray-600">{new Date(c.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
-                <span className="text-xs text-gray-600">{c.message_count}条</span>
-                {c.last_intent && (
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-gray-600 text-gray-300">{INTENT_LABELS[c.last_intent] || c.last_intent}</span>
-                )}
-                {c.bargain_count > 0 && (
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">议{c.bargain_count}次</span>
-                )}
-              </div>
-            </button>
-          ))}
-        </div>
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {selectedConv && (
-            <div className="pb-3 mb-3 border-b border-gray-700 shrink-0">
-              <p className="text-sm font-medium">{selectedConv.item_title || '未知商品'}{selectedConv.item_price ? ` · ¥${selectedConv.item_price}` : ''}</p>
-              <p className="text-xs text-gray-400">买家 {selectedConv.user_nickname || selectedConv.user_id} · 商品 {selectedConv.item_id}</p>
-            </div>
-          )}
-          <div className="flex-1 overflow-auto space-y-3">
-            {messages.map((m) => (
-              <div key={m.id} className={`flex ${m.role === 'assistant' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[70%] px-3 py-2 rounded-lg text-sm ${m.role === 'assistant' ? 'bg-emerald-900/50 text-emerald-100' : 'bg-gray-700 text-gray-200'}`}>
-                  <p>{m.content}</p>
-                  <p className={`text-xs mt-1 ${m.role === 'assistant' ? 'text-emerald-400/50' : 'text-gray-500'}`}>
-                    {new Date(m.created_at).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                  </p>
+    <div className="space-y-5 animate-fade-in">
+      <div>
+        <h2 className="text-2xl font-bold text-gray-50 flex items-center gap-2">
+          <MessageSquare size={22} className="text-primary-400" />
+          对话日志
+        </h2>
+        <p className="text-sm text-dark-400 mt-1">查看历史买家对话与 AI 回复记录</p>
+      </div>
+
+      <div className="card overflow-hidden">
+        <div className="flex h-[calc(100vh-14rem)] min-h-[480px]">
+          {/* Conversation list */}
+          <div className="w-80 overflow-auto border-r border-dark-700/60 p-2 space-y-1">
+            {conversations.length === 0 && (
+              <p className="text-dark-400 text-sm py-8 text-center">暂无对话记录</p>
+            )}
+            {conversations.map((c) => (
+              <button
+                key={c.chat_id}
+                onClick={() => selectConversation(c)}
+                className={`w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all ${
+                  selectedChat === c.chat_id
+                    ? 'bg-primary-500/15 text-primary-100 border border-primary-500/30'
+                    : 'text-gray-200 border border-transparent hover:bg-dark-800/60'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium truncate">{c.item_title || '未知商品'}</span>
+                  {c.item_price != null && c.item_price > 0 && (
+                    <span className="text-xs text-primary-400 shrink-0 font-medium">¥{c.item_price}</span>
+                  )}
                 </div>
-              </div>
+                <p className="text-xs text-dark-400 mt-0.5 truncate">买家：{c.user_nickname || c.user_id}</p>
+                {c.last_message && (
+                  <p className="text-xs text-dark-500 mt-1 truncate">{c.last_message}</p>
+                )}
+                <div className="flex items-center flex-wrap gap-1.5 mt-1.5">
+                  <span className="text-[11px] text-dark-500">
+                    {new Date(c.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  <span className="text-[11px] text-dark-500">·</span>
+                  <span className="text-[11px] text-dark-500">{c.message_count} 条</span>
+                  {c.last_intent && (
+                    <span className="badge badge-muted !text-[10px] !py-0">{INTENT_LABELS[c.last_intent] || c.last_intent}</span>
+                  )}
+                  {c.bargain_count > 0 && (
+                    <span className="badge badge-warning !text-[10px] !py-0">议 {c.bargain_count}</span>
+                  )}
+                </div>
+              </button>
             ))}
-            {!selectedChat && <p className="text-gray-500 text-sm">选择一个会话查看消息</p>}
+          </div>
+
+          {/* Message panel */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {selectedConv && (
+              <div className="px-5 py-3 border-b border-dark-700/60 shrink-0">
+                <p className="text-sm font-medium text-gray-100">
+                  {selectedConv.item_title || '未知商品'}
+                  {selectedConv.item_price ? <span className="text-primary-400 ml-2">¥{selectedConv.item_price}</span> : null}
+                </p>
+                <p className="text-xs text-dark-400 mt-0.5">
+                  买家 {selectedConv.user_nickname || selectedConv.user_id} · 商品 {selectedConv.item_id}
+                </p>
+              </div>
+            )}
+            <div className="flex-1 overflow-auto p-5 space-y-3">
+              {!selectedChat && (
+                <p className="text-dark-400 text-sm text-center pt-8">选择一个会话查看消息</p>
+              )}
+              {messages.map((m) => (
+                <div key={m.id} className={`flex ${m.role === 'assistant' ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    className={`max-w-[70%] px-3.5 py-2 rounded-2xl text-sm ${
+                      m.role === 'assistant'
+                        ? 'bg-gradient-primary text-white shadow-md shadow-primary-500/20'
+                        : 'bg-dark-800 text-gray-100 border border-dark-700/60'
+                    }`}
+                  >
+                    <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                    <p className={`text-[10px] mt-1 ${m.role === 'assistant' ? 'text-white/60' : 'text-dark-500'}`}>
+                      {new Date(m.created_at).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
