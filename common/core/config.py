@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic_settings import BaseSettings
 
 DB_OVERRIDABLE_KEYS = ("API_KEY", "MODEL_BASE_URL", "MODEL_NAME", "SKIP_KEYWORDS")
@@ -26,6 +27,8 @@ class Settings(BaseSettings):
     API_KEY: str = ""
     MODEL_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     MODEL_NAME: str = "qwen-max"
+    # 字符串形式存放：允许 "" / "none" / "null" 表示禁用 top_p（部分网关不支持同时传 temperature 与 top_p）
+    MODEL_TOP_P: Optional[str] = "0.8"
 
     COOKIES_STR: str = ""
 

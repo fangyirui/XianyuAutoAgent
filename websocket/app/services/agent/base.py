@@ -4,6 +4,19 @@ from loguru import logger
 from common.core import settings
 
 
+def resolve_top_p() -> Optional[float]:
+    """解析 settings.MODEL_TOP_P。默认 "0.8" 与旧行为字节一致；
+    空串 / "none" / "null"（不区分大小写、允许前后空白）或非数值时返回 None，调用方应不传 top_p。"""
+    raw = (settings.MODEL_TOP_P or "").strip()
+    if not raw or raw.lower() in ("none", "null"):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(f"MODEL_TOP_P={settings.MODEL_TOP_P!r} 无法解析为浮点数，已禁用 top_p")
+        return None
+
+
 class BaseAgent:
     def __init__(self, client: AsyncOpenAI, system_prompt: str, safety_filter):
         self.client = client
@@ -46,14 +59,17 @@ class BaseAgent:
         logger.info(f"[{self.__class__.__name__}] LLM请求 | model={settings.MODEL_NAME}, temp={temperature}")
         logger.debug(f"[{self.__class__.__name__}] 完整提示词:\n{messages[0]['content']}")
         logger.debug(f"[{self.__class__.__name__}] 用户输入: {messages[-1]['content']}")
+        kwargs = dict(
+            model=settings.MODEL_NAME,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=500,
+        )
+        top_p = resolve_top_p()
+        if top_p is not None:
+            kwargs["top_p"] = top_p
         try:
-            response = await self.client.chat.completions.create(
-                model=settings.MODEL_NAME,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=500,
-                top_p=0.8
-            )
+            response = await self.client.chat.completions.create(**kwargs)
             result = response.choices[0].message.content or ""
             logger.info(f"[{self.__class__.__name__}] LLM响应: {result}")
             logger.debug(f"[{self.__class__.__name__}] token用量: {response.usage}")

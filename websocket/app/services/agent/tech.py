@@ -1,6 +1,6 @@
 from typing import Optional
 from loguru import logger
-from .base import BaseAgent
+from .base import BaseAgent, resolve_top_p
 from common.core import settings
 
 
@@ -19,15 +19,18 @@ class TechAgent(BaseAgent):
         logger.debug(f"[TechAgent] 完整提示词:\n{messages[0]['content']}")
         logger.debug(f"[TechAgent] 用户输入: {messages[-1]['content']}")
 
+        kwargs = dict(
+            model=settings.MODEL_NAME,
+            messages=messages,
+            temperature=0.4,
+            max_tokens=500,
+            extra_body={"enable_search": True},
+        )
+        top_p = resolve_top_p()
+        if top_p is not None:
+            kwargs["top_p"] = top_p
         try:
-            response = await self.client.chat.completions.create(
-                model=settings.MODEL_NAME,
-                messages=messages,
-                temperature=0.4,
-                max_tokens=500,
-                top_p=0.8,
-                extra_body={"enable_search": True}
-            )
+            response = await self.client.chat.completions.create(**kwargs)
             result = self.safety_filter(response.choices[0].message.content)
             logger.info(f"[TechAgent] LLM响应: {result}")
             logger.debug(f"[TechAgent] token用量: {response.usage}")

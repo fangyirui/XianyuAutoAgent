@@ -1,6 +1,6 @@
 from typing import Optional
 from loguru import logger
-from .base import BaseAgent
+from .base import BaseAgent, resolve_top_p
 from common.core import settings
 
 
@@ -22,14 +22,17 @@ class PriceAgent(BaseAgent):
         logger.debug(f"[PriceAgent] 完整提示词:\n{messages[0]['content']}")
         logger.debug(f"[PriceAgent] 用户输入: {messages[-1]['content']}")
 
+        kwargs = dict(
+            model=settings.MODEL_NAME,
+            messages=messages,
+            temperature=dynamic_temp,
+            max_tokens=500,
+        )
+        top_p = resolve_top_p()
+        if top_p is not None:
+            kwargs["top_p"] = top_p
         try:
-            response = await self.client.chat.completions.create(
-                model=settings.MODEL_NAME,
-                messages=messages,
-                temperature=dynamic_temp,
-                max_tokens=500,
-                top_p=0.8
-            )
+            response = await self.client.chat.completions.create(**kwargs)
             result = self.safety_filter(response.choices[0].message.content)
             logger.info(f"[PriceAgent] LLM响应: {result}")
             logger.debug(f"[PriceAgent] token用量: {response.usage}")
