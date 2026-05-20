@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ScrollText, Pause, Play, Trash2, Search } from 'lucide-react'
+import request from '@/utils/request'
 
 interface LogEntry { time: string; level: string; message: string; module: string }
 
@@ -27,23 +28,53 @@ export default function RuntimeLogsPage() {
   useEffect(() => { pausedRef.current = paused }, [paused])
 
   useEffect(() => {
-    const token = localStorage.getItem('access_token') || ''
+    let cancelled = false
+    let es: EventSource | null = null
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let retries = 0
+    const MAX_RETRIES = 5
 
-    fetch('/api/logs/runtime/history?limit=200', { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((data) => setLogs(data))
-      .catch(() => {})
-
-    const evtSource = new EventSource(`/api/logs/runtime/stream?token=${token}`)
-    evtSource.onmessage = (e) => {
-      if (pausedRef.current) return
+    const loadHistory = async () => {
       try {
-        const entry: LogEntry = JSON.parse(e.data)
-        setLogs((prev) => [...prev.slice(-499), entry])
-      } catch { /* ignore parse error */ }
+        const { data } = await request.get('/logs/runtime/history', { params: { limit: 200 } })
+        if (!cancelled) setLogs(data)
+      } catch { /* axios interceptor handles 401 / redirect to /login */ }
     }
-    evtSource.onerror = () => { evtSource.close() }
-    return () => evtSource.close()
+
+    const openStream = () => {
+      if (cancelled) return
+      const token = localStorage.getItem('access_token') || ''
+      if (!token) return
+      es = new EventSource(`/api/logs/runtime/stream?token=${encodeURIComponent(token)}`)
+      es.onopen = () => { retries = 0 }
+      es.onmessage = (e) => {
+        if (pausedRef.current) return
+        try {
+          const entry: LogEntry = JSON.parse(e.data)
+          setLogs((prev) => [...prev.slice(-499), entry])
+        } catch { /* ignore parse error */ }
+      }
+      es.onerror = async () => {
+        es?.close()
+        es = null
+        if (cancelled || retries >= MAX_RETRIES) return
+        retries += 1
+        // Trigger axios call so the 401 interceptor refreshes the access token if needed
+        try { await request.get('/logs/runtime/history', { params: { limit: 1 } }) } catch { return }
+        if (cancelled) return
+        const backoff = Math.min(1000 * 2 ** (retries - 1), 15000)
+        retryTimer = setTimeout(openStream, backoff)
+      }
+    }
+
+    loadHistory()
+    openStream()
+
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+      es?.close()
+    }
   }, [])
 
   useEffect(() => {

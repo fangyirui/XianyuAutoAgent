@@ -1,8 +1,16 @@
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional
 import os
 from openai import OpenAI
 from loguru import logger
+
+
+def _resolve_top_p() -> Optional[float]:
+    """读取 MODEL_TOP_P。默认 0.8 与旧行为一致；置空或 'none' 时不传 top_p（兼容只允许 temperature 的模型）。"""
+    raw = os.getenv("MODEL_TOP_P", "0.8")
+    if raw == "" or raw.lower() == "none":
+        return None
+    return float(raw)
 
 
 class XianyuReplyBot:
@@ -223,13 +231,16 @@ class BaseAgent:
 
     def _call_llm(self, messages: List[Dict], temperature: float = 0.4) -> str:
         """调用大模型"""
-        response = self.client.chat.completions.create(
+        kwargs = dict(
             model=os.getenv("MODEL_NAME", "qwen-max"),
             messages=messages,
             temperature=temperature,
             max_tokens=500,
-            top_p=0.8
         )
+        top_p = _resolve_top_p()
+        if top_p is not None:
+            kwargs["top_p"] = top_p
+        response = self.client.chat.completions.create(**kwargs)
         return response.choices[0].message.content or ""
 
 
@@ -242,13 +253,16 @@ class PriceAgent(BaseAgent):
         messages = self._build_messages(user_msg, item_desc, context)
         messages[0]['content'] += f"\n▲当前议价轮次：{bargain_count}"
 
-        response = self.client.chat.completions.create(
+        kwargs = dict(
             model=os.getenv("MODEL_NAME", "qwen-max"),
             messages=messages,
             temperature=dynamic_temp,
             max_tokens=500,
-            top_p=0.8
         )
+        top_p = _resolve_top_p()
+        if top_p is not None:
+            kwargs["top_p"] = top_p
+        response = self.client.chat.completions.create(**kwargs)
         return self.safety_filter(response.choices[0].message.content)
 
     def _calc_temperature(self, bargain_count: int) -> float:
@@ -263,16 +277,19 @@ class TechAgent(BaseAgent):
         messages = self._build_messages(user_msg, item_desc, context)
         # messages[0]['content'] += "\n▲知识库：\n" + self._fetch_tech_specs()
 
-        response = self.client.chat.completions.create(
+        kwargs = dict(
             model=os.getenv("MODEL_NAME", "qwen-max"),
             messages=messages,
             temperature=0.4,
             max_tokens=500,
-            top_p=0.8,
             extra_body={
                 "enable_search": True,
-            }
+            },
         )
+        top_p = _resolve_top_p()
+        if top_p is not None:
+            kwargs["top_p"] = top_p
+        response = self.client.chat.completions.create(**kwargs)
 
         return self.safety_filter(response.choices[0].message.content)
 
