@@ -51,44 +51,42 @@
 ## 🚴 快速开始
 小白请直接查看[保姆级教学文档](https://my.feishu.cn/wiki/JtkBwkI9GiokZikVdyNceEfZncE)
 ### 环境要求
-- Python 3.8+
+- Docker + Docker Compose
 
 ### 安装步骤
 ```bash
-1. 克隆仓库
+# 1. 克隆仓库
 git clone https://github.com/shaxiu/XianyuAutoAgent.git
 cd XianyuAutoAgent
 
-2. 安装依赖
-pip install -r requirements.txt
+# 2. 配置环境变量
+cp .env.example .env
+# 编辑 .env，填入 API_KEY / MODEL_BASE_URL / MODEL_NAME / COOKIES_STR 等
 
-3. 配置环境变量
-创建一个 `.env` 文件，包含以下内容，也可直接重命名 `.env.example` ：
-#必配配置
-API_KEY=apikey通过模型平台获取
-COOKIES_STR=填写网页端获取的cookie
-MODEL_BASE_URL=模型地址
-MODEL_NAME=模型名称
-#可选配置
-TOGGLE_KEYWORDS=接管模式切换关键词，默认为句号（输入句号切换为人工接管，再次输入则切换AI接管）
-SIMULATE_HUMAN_TYPING=True/False #模拟人工回复延迟
-
-注意：默认使用的模型是通义千问，如需使用其他API，请自行修改.env文件中的模型地址和模型名称；
-COOKIES_STR自行在闲鱼网页端获取cookies(网页端F12打开控制台，选择Network，点击Fetch/XHR,点击一个请求，查看cookies)
-
-4. 创建提示词文件prompts/*_prompt.txt（也可以直接将模板名称中的_example去掉），否则默认读取四个提示词模板中的内容
+# 3. 一键启动全部服务
+docker compose up -d --build
 ```
 
-### 使用方法
+启动后默认端口：
+- `80` — 前端控制台（浏览器访问 `http://服务器IP/`）
+- `8089` — 后端 API（backend-web）
+- `8090` — WebSocket 服务
+- `3306` / `6379` — MySQL / Redis（仅内网用，生产环境建议关闭对外端口）
 
-运行主程序：
+查看日志：
 ```bash
-python main.py
+docker compose logs -f websocket      # 闲鱼 WS 服务
+docker compose logs -f backend-web    # 后台 API
+docker compose logs -f frontend       # 前端
 ```
+
+更详细的部署说明见 `部署.txt`。
 
 ### 自定义提示词
 
-可以通过编辑 `prompts` 目录下的文件来自定义各个专家的提示词：
+提示词存储在 MySQL `system_config` 表（key 形如 `prompt:classify_prompt`），可通过前端控制台在线编辑。
+
+DB 中无对应记录时，回退读取 `websocket/prompts/` 目录下的同名 `.txt` 文件作为兜底（已提交 `*_prompt_example.txt` 作为模板，去掉 `_example` 后缀即可生效）：
 
 - `classify_prompt.txt`: 意图分类提示词
 - `price_prompt.txt`: 价格专家提示词
