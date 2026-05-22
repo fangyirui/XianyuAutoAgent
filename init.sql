@@ -58,3 +58,18 @@ CREATE TABLE IF NOT EXISTS sellers (
     updated_at DATETIME DEFAULT NOW() ON UPDATE NOW(),
     INDEX idx_sellers_is_active (is_active)
 );
+
+CREATE TABLE IF NOT EXISTS ai_call_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    agent_name VARCHAR(32) NOT NULL COMMENT 'DefaultAgent/PriceAgent/TechAgent/ClassifyAgent',
+    model VARCHAR(64) NOT NULL,
+    chat_id VARCHAR(64) NULL COMMENT '关联会话；分类阶段可能为NULL',
+    prompt_tokens INT NOT NULL DEFAULT 0,
+    completion_tokens INT NOT NULL DEFAULT 0,
+    total_tokens INT NOT NULL DEFAULT 0,
+    latency_ms INT NOT NULL DEFAULT 0,
+    success TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT NOW(),
+    INDEX idx_ai_log_created (created_at),
+    INDEX idx_ai_log_agent_created (agent_name, created_at)
+);
