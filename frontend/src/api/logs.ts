@@ -10,9 +10,45 @@ export async function getMessages(chatId: string) {
   return data
 }
 
-export async function getStats() {
+export interface IntentItem {
+  name: string
+  count: number
+}
+
+export interface DashboardStats {
+  realtime: {
+    manual_active: number
+  }
+  today: {
+    conversations: number
+    messages: number
+    ai_replies: number
+    user_messages: number
+    new_buyers: number
+    manual_takeover_triggered: number
+    ai_calls: number
+    tokens: number
+    ai_errors: number
+    ai_error_rate: number
+    avg_latency_ms: number
+    intent_distribution: IntentItem[]
+    agent_distribution: IntentItem[]
+  }
+  cumulative: {
+    conversations: number
+    messages: number
+    buyers: number
+    bargain_sessions: number
+    ai_calls: number
+    tokens: number
+  }
+  total_conversations: number
+  total_messages: number
+}
+
+export async function getStats(): Promise<DashboardStats> {
   const { data } = await request.get('/logs/stats')
-  return data
+  return data as DashboardStats
 }
 
 export async function deleteConversation(chatId: string) {
