@@ -52,7 +52,9 @@
       "Bash(python3 *)",
       "Bash(docker pull *)",
       "Bash(git *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(xargs -I {} sh -c 'echo \"=== {} ===\"; cat {}')",
+      "Bash(./node_modules/.bin/tsc --noEmit)"
     ]
   }
 }
