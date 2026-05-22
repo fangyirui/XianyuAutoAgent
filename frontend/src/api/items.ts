@@ -14,3 +14,18 @@ export async function updateItemPrompt(itemId: string, customPrompt: string) {
   const { data } = await request.patch(`/items/${itemId}`, { custom_prompt: customPrompt })
   return data
 }
+
+export interface ItemDefaultReplyPatch {
+  default_reply?: string
+  default_reply_enabled?: boolean
+}
+
+export async function updateItemDefaultReply(itemId: string, patch: ItemDefaultReplyPatch) {
+  const { data } = await request.patch(`/items/${itemId}`, patch)
+  return data as {
+    ok: boolean
+    custom_prompt: string
+    default_reply: string
+    default_reply_enabled: boolean
+  }
+}

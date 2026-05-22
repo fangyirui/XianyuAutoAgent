@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS item_cache (
     price DECIMAL(10,2),
     description TEXT,
     custom_prompt TEXT NULL COMMENT '该商品的额外AI提示词',
+    default_reply TEXT NULL COMMENT '该商品的固定默认回复文本',
+    default_reply_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '启用后跳过AI直接返回default_reply',
     raw_json JSON,
     fetched_at DATETIME DEFAULT NOW(),
     expired_at DATETIME,

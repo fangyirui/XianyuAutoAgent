@@ -55,6 +55,8 @@ async def list_items(
             "price": float(r.price) if r.price else 0,
             "description": r.description or "",
             "custom_prompt": r.custom_prompt or "",
+            "default_reply": r.default_reply or "",
+            "default_reply_enabled": bool(r.default_reply_enabled),
             "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
         })
 
@@ -73,14 +75,17 @@ async def sync_items():
             return await resp.json()
 
 
-class ItemPromptUpdate(BaseModel):
-    custom_prompt: str
+class ItemConfigUpdate(BaseModel):
+    # 三字段全部 Optional：通过 model_dump(exclude_unset=True) 区分"未提供"与"清空"
+    custom_prompt: Optional[str] = None
+    default_reply: Optional[str] = None
+    default_reply_enabled: Optional[bool] = None
 
 
 @router.patch("/{item_id}")
-async def update_item_prompt(
+async def update_item_config(
     item_id: str,
-    payload: ItemPromptUpdate,
+    payload: ItemConfigUpdate,
     db: AsyncSession = Depends(get_db),
 ):
     # 仅允许修改当前活跃卖家名下的商品
@@ -97,6 +102,17 @@ async def update_item_prompt(
     if not item:
         raise HTTPException(status_code=404, detail="商品不存在或无权限修改")
 
-    item.custom_prompt = payload.custom_prompt or None
+    data = payload.model_dump(exclude_unset=True)
+    if "custom_prompt" in data:
+        item.custom_prompt = data["custom_prompt"] or None
+    if "default_reply" in data:
+        item.default_reply = data["default_reply"] or None
+    if "default_reply_enabled" in data:
+        item.default_reply_enabled = bool(data["default_reply_enabled"])
     await db.commit()
-    return {"ok": True, "custom_prompt": item.custom_prompt or ""}
+    return {
+        "ok": True,
+        "custom_prompt": item.custom_prompt or "",
+        "default_reply": item.default_reply or "",
+        "default_reply_enabled": bool(item.default_reply_enabled),
+    }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Package, RefreshCw, Search, Pencil, ChevronDown, ChevronRight } from 'lucide-react'
-import { getItems, syncItems, updateItemPrompt } from '@/api/items'
+import { getItems, syncItems, updateItemPrompt, updateItemDefaultReply } from '@/api/items'
 
 interface Item {
   id: number
@@ -10,6 +10,8 @@ interface Item {
   price: number
   description: string
   custom_prompt: string
+  default_reply: string
+  default_reply_enabled: boolean
   fetched_at: string | null
 }
 
@@ -28,6 +30,11 @@ export default function ItemsPage() {
   const [promptDraft, setPromptDraft] = useState('')
   const [savingPromptId, setSavingPromptId] = useState<number | null>(null)
   const [promptErr, setPromptErr] = useState('')
+  const [editingReplyId, setEditingReplyId] = useState<number | null>(null)
+  const [replyDraft, setReplyDraft] = useState('')
+  const [replyEnabledDraft, setReplyEnabledDraft] = useState(false)
+  const [savingReplyId, setSavingReplyId] = useState<number | null>(null)
+  const [replyErr, setReplyErr] = useState('')
   const pageSize = 20
 
   const toggleExpand = (id: number) => {
@@ -100,6 +107,46 @@ export default function ItemsPage() {
     }
   }
 
+  const startEditReply = (item: Item) => {
+    setEditingReplyId(item.id)
+    setReplyDraft(item.default_reply || '')
+    setReplyEnabledDraft(item.default_reply_enabled)
+    setReplyErr('')
+  }
+
+  const cancelEditReply = () => {
+    setEditingReplyId(null)
+    setReplyDraft('')
+    setReplyEnabledDraft(false)
+    setReplyErr('')
+  }
+
+  const saveReply = async (item: Item) => {
+    if (replyEnabledDraft && !replyDraft.trim()) {
+      setReplyErr('启用默认回复时必须填写回复内容')
+      return
+    }
+    setSavingReplyId(item.id)
+    setReplyErr('')
+    try {
+      const res = await updateItemDefaultReply(item.item_id, {
+        default_reply: replyDraft,
+        default_reply_enabled: replyEnabledDraft,
+      })
+      setItems((prev) => prev.map((it) => it.id === item.id
+        ? { ...it, default_reply: res.default_reply ?? replyDraft, default_reply_enabled: res.default_reply_enabled }
+        : it,
+      ))
+      setEditingReplyId(null)
+      setReplyDraft('')
+      setReplyEnabledDraft(false)
+    } catch (e: any) {
+      setReplyErr(e?.response?.data?.detail || '保存失败')
+    } finally {
+      setSavingReplyId(null)
+    }
+  }
+
   const totalPages = Math.ceil(total / pageSize)
 
   return (
@@ -164,6 +211,7 @@ export default function ItemsPage() {
                   <th className="!text-right">价格</th>
                   <th>描述</th>
                   <th>AI 提示词</th>
+                  <th>默认回复</th>
                   <th>缓存时间</th>
                 </tr>
               </thead>
@@ -174,6 +222,9 @@ export default function ItemsPage() {
                   const editing = editingPromptId === item.id
                   const saving = savingPromptId === item.id
                   const hasPrompt = !!(item.custom_prompt && item.custom_prompt.trim())
+                  const editingReply = editingReplyId === item.id
+                  const savingReply = savingReplyId === item.id
+                  const hasReply = !!(item.default_reply && item.default_reply.trim())
                   return (
                     <tr key={item.id}>
                       <td className="font-mono text-xs text-dark-400 whitespace-nowrap">{item.item_id}</td>
@@ -228,6 +279,61 @@ export default function ItemsPage() {
                             <span className="break-words">
                               {hasPrompt ? (
                                 item.custom_prompt.length > 20 ? `${item.custom_prompt.slice(0, 20)}…` : item.custom_prompt
+                              ) : (
+                                <span className="text-dark-500">未设置（点击配置）</span>
+                              )}
+                            </span>
+                          </button>
+                        )}
+                      </td>
+                      <td className="max-w-md text-xs">
+                        {editingReply ? (
+                          <div className="space-y-2">
+                            <label className="inline-flex items-center gap-2 text-xs cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={replyEnabledDraft}
+                                onChange={(e) => setReplyEnabledDraft(e.target.checked)}
+                                className="h-3.5 w-3.5 accent-primary-500"
+                              />
+                              <span className={replyEnabledDraft ? 'text-emerald-300' : 'text-dark-400'}>
+                                {replyEnabledDraft ? '已启用（将跳过 AI 直接回复）' : '已禁用'}
+                              </span>
+                            </label>
+                            <textarea
+                              value={replyDraft}
+                              onChange={(e) => setReplyDraft(e.target.value)}
+                              maxLength={500}
+                              rows={3}
+                              className="input !p-2.5 text-xs"
+                              placeholder="启用后，所有买家消息都会收到这段固定回复，跳过 AI 生成"
+                            />
+                            <div className="flex gap-2 items-center">
+                              <button onClick={() => saveReply(item)} disabled={savingReply} className="btn btn-primary btn-sm">
+                                {savingReply ? '保存中…' : '保存'}
+                              </button>
+                              <button onClick={cancelEditReply} disabled={savingReply} className="btn btn-secondary btn-sm">
+                                取消
+                              </button>
+                              <span className="text-dark-500 ml-auto">{replyDraft.length}/500</span>
+                            </div>
+                            {replyErr && <div className="text-red-400 text-xs">{replyErr}</div>}
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => startEditReply(item)}
+                            className="inline-flex items-start gap-1.5 text-left text-soft hover:text-primary-300 transition-colors w-full"
+                            title="点击编辑"
+                          >
+                            <Pencil size={12} className="text-dark-500 mt-0.5 flex-shrink-0" />
+                            <span className="break-words space-y-0.5">
+                              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium mr-1.5 ${item.default_reply_enabled ? 'bg-emerald-500/15 text-emerald-300' : 'bg-dark-700 text-dark-400'}`}>
+                                {item.default_reply_enabled ? '启用' : '禁用'}
+                              </span>
+                              {hasReply ? (
+                                <span>
+                                  {item.default_reply.length > 20 ? `${item.default_reply.slice(0, 20)}…` : item.default_reply}
+                                </span>
                               ) : (
                                 <span className="text-dark-500">未设置（点击配置）</span>
                               )}

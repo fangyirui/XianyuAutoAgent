@@ -52,6 +52,26 @@ async def migrate() -> None:
             ))
             logger.info("迁移: 已为 item_cache 添加 custom_prompt 列")
 
+        # item_cache.default_reply / default_reply_enabled（商品级默认回复）
+        dr_col_exists = (await conn.execute(text("""
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'item_cache' AND COLUMN_NAME = 'default_reply'
+        """))).scalar()
+        if dr_col_exists == 0:
+            await conn.execute(text(
+                "ALTER TABLE item_cache ADD COLUMN default_reply TEXT NULL COMMENT '该商品的固定默认回复文本' AFTER custom_prompt"
+            ))
+            logger.info("迁移: 已为 item_cache 添加 default_reply 列")
+        dre_col_exists = (await conn.execute(text("""
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'item_cache' AND COLUMN_NAME = 'default_reply_enabled'
+        """))).scalar()
+        if dre_col_exists == 0:
+            await conn.execute(text(
+                "ALTER TABLE item_cache ADD COLUMN default_reply_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '启用后跳过AI直接返回default_reply' AFTER default_reply"
+            ))
+            logger.info("迁移: 已为 item_cache 添加 default_reply_enabled 列")
+
         # messages.role ENUM 扩充 'system'（闲鱼 [xxx] 系统事件入库）
         role_type = (await conn.execute(text("""
             SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS

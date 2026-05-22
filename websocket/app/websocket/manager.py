@@ -120,6 +120,22 @@ class XianyuLive:
             row = result.first()
             return (row[0] or "") if row else ""
 
+    async def _get_item_default_reply(self, item_id: str) -> str:
+        """读取商品级默认回复；仅在开关启用且文本非空时返回。否则返回空串
+        （等价于'未启用'），调用方据此判断是否短路 AI 流程。"""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(ItemCache.default_reply, ItemCache.default_reply_enabled).where(
+                    ItemCache.item_id == item_id
+                )
+            )
+            row = result.first()
+            if not row:
+                return ""
+            enabled = bool(row[1])
+            text = (row[0] or "").strip() if row[0] else ""
+            return text if (enabled and text) else ""
+
     async def _is_my_item(self, item_id: str) -> bool:
         """item_cache 表里是否存在归属于当前卖家的此商品。"""
         async with AsyncSessionLocal() as db:
@@ -376,6 +392,17 @@ class XianyuLive:
         # 归属校验：商品不在当前卖家的商品库里，说明这是别人的商品（自己以买家身份的会话），跳过自动回复。
         if not await self._is_my_item(item_id):
             logger.info(f"商品 {item_id} 不属于当前卖家 {self.myid}，跳过自动回复 | chat_id={chat_id}")
+            return
+
+        # 商品级默认回复门控：启用且文本非空时短路 AI 流程，直接发固定文本。
+        # 默认（disabled 或文本为空）下返回空串，主流程字节级不变。
+        default_reply = await self._get_item_default_reply(item_id)
+        if default_reply:
+            conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
+            await self._add_message(conv.id, "user", send_message)
+            await self._add_message(conv.id, "assistant", default_reply)
+            logger.info(f"使用商品默认回复 | chat_id={chat_id}, item_id={item_id}, reply={default_reply}")
+            await self.send_msg(ws, chat_id, send_user_id, default_reply)
             return
 
         item_info = await self._get_item_cache(item_id)
