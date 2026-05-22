@@ -7,10 +7,18 @@
 
 用法：在 websocket 容器内执行
   docker compose exec websocket python /app/scripts/verify_dashboard_byte_equality.py
+或直接在本地执行（无需 PYTHONPATH）
+  python scripts/verify_dashboard_byte_equality.py
 """
 import asyncio
 import inspect
 import sys
+from pathlib import Path
+
+# 加载 project root 到 sys.path 让脚本能 import websocket.app.*（本地直接运行时使用）
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "websocket"))
 
 
 def check_build_messages_unchanged():
@@ -55,20 +63,30 @@ def check_signature_contains_chat_id():
 
 
 async def check_fire_and_forget_safe():
-    """response=None 时落库任务不应抛错（仅 warning）。"""
+    """response=None 时 _fire_and_forget_record 的调度不抛；_record_usage 自身也不抛。"""
     from app.services.agent.base import BaseAgent
 
     agent = BaseAgent.__new__(BaseAgent)
     agent.system_prompt = ""
     agent.safety_filter = lambda x: x
 
-    # 应不抛
+    # 调度安全：不抛
     agent._fire_and_forget_record(
         model="test-model", chat_id=None, response=None, latency_ms=10, success=False
     )
-    # 让事件循环跑一遍
-    await asyncio.sleep(0.1)
     print("[OK] _fire_and_forget_record(None response) 调度安全")
+
+    # 直接调用 _record_usage 验证内部路径对 None response 也是安全的
+    # （写库会失败但 _record_usage 应自己 try/except 兜住，不向调用方抛）
+    await agent._record_usage(
+        agent_name="BaseAgent",
+        model="test-model",
+        chat_id=None,
+        response=None,
+        latency_ms=10,
+        success=False,
+    )
+    print("[OK] _record_usage(None response) 内部路径安全（DB 写入失败仅 warning）")
 
 
 async def main():
