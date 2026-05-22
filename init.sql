@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE TABLE IF NOT EXISTS messages (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     conversation_id BIGINT NOT NULL,
-    role ENUM('user', 'assistant') NOT NULL,
+    role ENUM('user', 'assistant', 'system') NOT NULL,
     content TEXT NOT NULL,
     created_at DATETIME DEFAULT NOW(),
     INDEX idx_conv_time (conversation_id, created_at),

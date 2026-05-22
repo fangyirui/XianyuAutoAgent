@@ -133,10 +133,13 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup():
         global _redis_task
-        from common.db import engine
+        from common.db import engine, migrate
         from common.models import Base
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        # 在开始处理消息之前先把 schema 迁移跑完（与 backend-web 启动并发安全：
+        # 每条 ALTER 都先查 INFORMATION_SCHEMA，幂等且 MySQL DDL 互斥）
+        await migrate()
         await _start_live()
         _redis_task = asyncio.create_task(_redis_subscriber())
 
