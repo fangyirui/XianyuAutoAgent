@@ -96,7 +96,7 @@ DB 中无对应记录时，回退读取 `websocket/prompts/` 目录下的同名 
 
 ## 🧸特别鸣谢
 本项目参考了以下开源项目：
-https://github.com/zhinianboke/xianyu-auto-reply
+https://github.com/shaxiu/XianyuAutoAgent
 
 ## 🛡 注意事项
 

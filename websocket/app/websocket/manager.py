@@ -363,7 +363,11 @@ class XianyuLive:
             return
 
         if is_bracket_system_message(send_message):
-            # 闲鱼客户端的 [xxx] 事件（如 [发来一个商品]/[买家拍下了商品]）：仅入库，不触发 AI 回复
+            # 闲鱼客户端的 [xxx] 事件（如 [发来一个商品]/[买家拍下了商品]）：仅入库，不触发 AI 回复。
+            # 归属校验前置：foreign item（自己以买家身份在别人店里）的事件丢弃，避免凭空建脏会话。
+            if not await self._is_my_item(item_id):
+                logger.debug(f"foreign item 的系统方括号消息，跳过: {send_message} | item_id={item_id}")
+                return
             conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
             await self._add_message(conv.id, "system", send_message)
             logger.debug(f"系统方括号消息已记录: {send_message}")
