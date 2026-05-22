@@ -1,8 +1,9 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func, desc, and_
 from common.db import get_db
-from common.models import Conversation, Message, ItemCache
+from common.models import Conversation, Message, ItemCache, AiCallLog
 from common.schemas import MessageOut
 from app.api.deps import get_current_user
 from typing import List, Optional
@@ -147,9 +148,148 @@ async def batch_delete_conversations(payload: BatchDeleteRequest, db: AsyncSessi
 
 @router.get("/stats")
 async def get_stats(db: AsyncSession = Depends(get_db)):
-    conv_count = await db.execute(select(func.count(Conversation.id)))
-    msg_count = await db.execute(select(func.count(Message.id)))
+    today_start = func.curdate()  # MySQL CURDATE() — 容器时区 Asia/Shanghai
+
+    # --- 实时 ---
+    q_realtime_manual_active = select(func.count(Conversation.id)).where(Conversation.manual_mode.is_(True))
+
+    # --- 今日 ---
+    q_today_conv = select(func.count(Conversation.id)).where(Conversation.created_at >= today_start)
+    q_today_msg = select(func.count(Message.id)).where(Message.created_at >= today_start)
+    q_today_ai_reply = select(func.count(Message.id)).where(
+        and_(Message.role == "assistant", Message.created_at >= today_start)
+    )
+    q_today_user_msg = select(func.count(Message.id)).where(
+        and_(Message.role == "user", Message.created_at >= today_start)
+    )
+    q_today_new_buyers = select(func.count(func.distinct(Conversation.user_id))).where(
+        Conversation.created_at >= today_start
+    )
+    q_today_takeover = select(func.count(Conversation.id)).where(
+        Conversation.manual_mode_at >= today_start
+    )
+    q_today_ai_calls = select(func.count(AiCallLog.id)).where(AiCallLog.created_at >= today_start)
+    q_today_tokens = select(func.coalesce(func.sum(AiCallLog.total_tokens), 0)).where(
+        AiCallLog.created_at >= today_start
+    )
+    q_today_ai_errors = select(func.count(AiCallLog.id)).where(
+        and_(AiCallLog.success.is_(False), AiCallLog.created_at >= today_start)
+    )
+    q_today_avg_latency = select(func.coalesce(func.avg(AiCallLog.latency_ms), 0)).where(
+        and_(AiCallLog.success.is_(True), AiCallLog.created_at >= today_start)
+    )
+    q_today_intent_dist = (
+        select(Conversation.last_intent, func.count(Conversation.id))
+        .where(and_(Conversation.updated_at >= today_start, Conversation.last_intent.isnot(None)))
+        .group_by(Conversation.last_intent)
+    )
+    q_today_agent_dist = (
+        select(AiCallLog.agent_name, func.count(AiCallLog.id))
+        .where(AiCallLog.created_at >= today_start)
+        .group_by(AiCallLog.agent_name)
+    )
+
+    # --- 累计 ---
+    q_cum_conv = select(func.count(Conversation.id))
+    q_cum_msg = select(func.count(Message.id))
+    q_cum_buyers = select(func.count(func.distinct(Conversation.user_id)))
+    q_cum_bargain = select(func.count(Conversation.id)).where(Conversation.bargain_count > 0)
+    q_cum_ai_calls = select(func.count(AiCallLog.id))
+    q_cum_tokens = select(func.coalesce(func.sum(AiCallLog.total_tokens), 0))
+
+    # 并发执行
+    results = await asyncio.gather(
+        db.execute(q_realtime_manual_active),
+        db.execute(q_today_conv),
+        db.execute(q_today_msg),
+        db.execute(q_today_ai_reply),
+        db.execute(q_today_user_msg),
+        db.execute(q_today_new_buyers),
+        db.execute(q_today_takeover),
+        db.execute(q_today_ai_calls),
+        db.execute(q_today_tokens),
+        db.execute(q_today_ai_errors),
+        db.execute(q_today_avg_latency),
+        db.execute(q_today_intent_dist),
+        db.execute(q_today_agent_dist),
+        db.execute(q_cum_conv),
+        db.execute(q_cum_msg),
+        db.execute(q_cum_buyers),
+        db.execute(q_cum_bargain),
+        db.execute(q_cum_ai_calls),
+        db.execute(q_cum_tokens),
+    )
+
+    (
+        r_realtime_manual_active,
+        r_today_conv,
+        r_today_msg,
+        r_today_ai_reply,
+        r_today_user_msg,
+        r_today_new_buyers,
+        r_today_takeover,
+        r_today_ai_calls,
+        r_today_tokens,
+        r_today_ai_errors,
+        r_today_avg_latency,
+        r_today_intent_dist,
+        r_today_agent_dist,
+        r_cum_conv,
+        r_cum_msg,
+        r_cum_buyers,
+        r_cum_bargain,
+        r_cum_ai_calls,
+        r_cum_tokens,
+    ) = results
+
+    today_ai_calls = r_today_ai_calls.scalar() or 0
+    today_ai_errors = r_today_ai_errors.scalar() or 0
+    today_error_rate = (today_ai_errors / today_ai_calls) if today_ai_calls > 0 else 0.0
+    today_avg_latency = int(r_today_avg_latency.scalar() or 0)
+
+    intent_distribution = [
+        {"name": name or "unknown", "count": int(count)}
+        for name, count in r_today_intent_dist.all()
+    ]
+    intent_distribution.sort(key=lambda x: x["count"], reverse=True)
+
+    agent_distribution = [
+        {"name": name, "count": int(count)}
+        for name, count in r_today_agent_dist.all()
+    ]
+    agent_distribution.sort(key=lambda x: x["count"], reverse=True)
+
+    cum_conv = r_cum_conv.scalar() or 0
+    cum_msg = r_cum_msg.scalar() or 0
+
     return {
-        "total_conversations": conv_count.scalar(),
-        "total_messages": msg_count.scalar(),
+        "realtime": {
+            "manual_active": r_realtime_manual_active.scalar() or 0,
+        },
+        "today": {
+            "conversations": r_today_conv.scalar() or 0,
+            "messages": r_today_msg.scalar() or 0,
+            "ai_replies": r_today_ai_reply.scalar() or 0,
+            "user_messages": r_today_user_msg.scalar() or 0,
+            "new_buyers": r_today_new_buyers.scalar() or 0,
+            "manual_takeover_triggered": r_today_takeover.scalar() or 0,
+            "ai_calls": today_ai_calls,
+            "tokens": int(r_today_tokens.scalar() or 0),
+            "ai_errors": today_ai_errors,
+            "ai_error_rate": round(today_error_rate, 4),
+            "avg_latency_ms": today_avg_latency,
+            "intent_distribution": intent_distribution,
+            "agent_distribution": agent_distribution,
+        },
+        "cumulative": {
+            "conversations": cum_conv,
+            "messages": cum_msg,
+            "buyers": r_cum_buyers.scalar() or 0,
+            "bargain_sessions": r_cum_bargain.scalar() or 0,
+            "ai_calls": r_cum_ai_calls.scalar() or 0,
+            "tokens": int(r_cum_tokens.scalar() or 0),
+        },
+        # 向后兼容旧字段，避免老前端构件加载时报错
+        "total_conversations": cum_conv,
+        "total_messages": cum_msg,
     }
