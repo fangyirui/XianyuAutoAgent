@@ -1,3 +1,5 @@
+import time
+import asyncio
 from typing import List, Dict, Optional
 from openai import AsyncOpenAI
 from loguru import logger
@@ -30,10 +32,11 @@ class BaseAgent:
         context: str,
         bargain_count: int = 0,
         item_custom_prompt: Optional[str] = None,
+        chat_id: Optional[str] = None,
     ) -> str:
         messages = self._build_messages(user_msg, item_desc, context, item_custom_prompt)
         logger.debug(f"[{self.__class__.__name__}] 构建消息完成，system_prompt长度={len(self.system_prompt)}, 商品额外提示词={'有' if item_custom_prompt else '无'}")
-        response = await self._call_llm(messages)
+        response = await self._call_llm(messages, chat_id=chat_id)
         filtered = self.safety_filter(response)
         if filtered != response:
             logger.warning(f"[{self.__class__.__name__}] 安全过滤触发，原始回复: {response}")
@@ -55,7 +58,12 @@ class BaseAgent:
             {"role": "user", "content": user_msg}
         ]
 
-    async def _call_llm(self, messages: List[Dict], temperature: float = 0.4) -> str:
+    async def _call_llm(
+        self,
+        messages: List[Dict],
+        temperature: float = 0.4,
+        chat_id: Optional[str] = None,
+    ) -> str:
         logger.info(f"[{self.__class__.__name__}] LLM请求 | model={settings.MODEL_NAME}, temp={temperature}")
         logger.debug(f"[{self.__class__.__name__}] 完整提示词:\n{messages[0]['content']}")
         logger.debug(f"[{self.__class__.__name__}] 用户输入: {messages[-1]['content']}")
@@ -68,6 +76,10 @@ class BaseAgent:
         top_p = resolve_top_p()
         if top_p is not None:
             kwargs["top_p"] = top_p
+
+        t0 = time.perf_counter()
+        success = True
+        response = None
         try:
             response = await self.client.chat.completions.create(**kwargs)
             result = response.choices[0].message.content or ""
@@ -75,5 +87,75 @@ class BaseAgent:
             logger.debug(f"[{self.__class__.__name__}] token用量: {response.usage}")
             return result
         except Exception as e:
+            success = False
             logger.error(f"[{self.__class__.__name__}] LLM调用失败: {e}")
             raise
+        finally:
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            self._fire_and_forget_record(
+                model=str(kwargs.get("model", "")),
+                chat_id=chat_id,
+                response=response,
+                latency_ms=latency_ms,
+                success=success,
+            )
+
+    def _fire_and_forget_record(
+        self,
+        model: str,
+        chat_id: Optional[str],
+        response,
+        latency_ms: int,
+        success: bool,
+    ) -> None:
+        """调度 _record_usage 为后台任务；任何调度错误不抛、仅 warning，绝不影响主流程。"""
+        try:
+            asyncio.create_task(
+                self._record_usage(
+                    agent_name=self.__class__.__name__,
+                    model=model,
+                    chat_id=chat_id,
+                    response=response,
+                    latency_ms=latency_ms,
+                    success=success,
+                )
+            )
+        except Exception as e:
+            logger.warning(f"[{self.__class__.__name__}] 落库任务调度失败: {e}")
+
+    async def _record_usage(
+        self,
+        agent_name: str,
+        model: str,
+        chat_id: Optional[str],
+        response,
+        latency_ms: int,
+        success: bool,
+    ) -> None:
+        """写入 ai_call_log。失败仅 warning。"""
+        try:
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = 0
+            if response is not None and getattr(response, "usage", None) is not None:
+                usage = response.usage
+                prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+                total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
+
+            from common.db import AsyncSessionLocal
+            from common.models import AiCallLog
+            async with AsyncSessionLocal() as db:
+                db.add(AiCallLog(
+                    agent_name=agent_name,
+                    model=model,
+                    chat_id=chat_id,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    latency_ms=latency_ms,
+                    success=success,
+                ))
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"[{agent_name}] ai_call_log 写库失败: {e}")
