@@ -125,7 +125,9 @@ class XianyuReplyBot:
         return "[安全提醒]请通过平台沟通" if any(p in text for p in blocked) else text
 
     def format_history(self, context: List[Dict]) -> str:
-        msgs = [m for m in context if m["role"] in ("user", "assistant")]
+        # 包含 system 角色：用于让 AI 看到闲鱼平台事件（如 [买家拍下了商品]）。
+        # 历史 DB 中无 system 行，旧路径输出字节级不变。
+        msgs = [m for m in context if m["role"] in ("user", "assistant", "system")]
         return "\n".join(f"{m['role']}: {m['content']}" for m in msgs)
 
     async def generate_reply(

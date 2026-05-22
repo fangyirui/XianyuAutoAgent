@@ -363,7 +363,10 @@ class XianyuLive:
             return
 
         if is_bracket_system_message(send_message):
-            logger.debug(f"系统方括号消息，跳过: {send_message}")
+            # 闲鱼客户端的 [xxx] 事件（如 [发来一个商品]/[买家拍下了商品]）：仅入库，不触发 AI 回复
+            conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
+            await self._add_message(conv.id, "system", send_message)
+            logger.debug(f"系统方括号消息已记录: {send_message}")
             return
 
         # 归属校验：商品不在当前卖家的商品库里，说明这是别人的商品（自己以买家身份的会话），跳过自动回复。

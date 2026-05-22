@@ -284,22 +284,36 @@ export default function LogsPage() {
               {!selectedChat && (
                 <p className="text-dark-400 text-sm text-center pt-8">选择一个会话查看消息</p>
               )}
-              {messages.map((m) => (
-                <div key={m.id} className={`flex ${m.role === 'assistant' ? 'justify-end' : 'justify-start'}`}>
-                  <div
-                    className={`max-w-[70%] px-3.5 py-2 rounded-2xl text-sm ${
-                      m.role === 'assistant'
-                        ? 'bg-gradient-primary text-white shadow-md shadow-primary-500/20'
-                        : 'bg-dark-800 text-gray-100 border border-dark-700/60'
-                    }`}
-                  >
-                    <p className="whitespace-pre-wrap break-words">{m.content}</p>
-                    <p className={`text-[10px] mt-1 ${m.role === 'assistant' ? 'text-white/60' : 'text-dark-500'}`}>
-                      {new Date(m.created_at).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </p>
+              {messages.map((m) => {
+                if (m.role === 'system') {
+                  return (
+                    <div key={m.id} className="flex justify-center">
+                      <div className="px-3 py-1 rounded-full text-[11px] text-dark-400 bg-dark-800/60 border border-dark-700/50">
+                        <span className="mr-1.5">{m.content}</span>
+                        <span className="text-dark-500">
+                          {new Date(m.created_at).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                }
+                return (
+                  <div key={m.id} className={`flex ${m.role === 'assistant' ? 'justify-end' : 'justify-start'}`}>
+                    <div
+                      className={`max-w-[70%] px-3.5 py-2 rounded-2xl text-sm ${
+                        m.role === 'assistant'
+                          ? 'bg-gradient-primary text-white shadow-md shadow-primary-500/20'
+                          : 'bg-dark-800 text-gray-100 border border-dark-700/60'
+                      }`}
+                    >
+                      <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                      <p className={`text-[10px] mt-1 ${m.role === 'assistant' ? 'text-white/60' : 'text-dark-500'}`}>
+                        {new Date(m.created_at).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         </div>
