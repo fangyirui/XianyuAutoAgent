@@ -1,7 +1,6 @@
-import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, func, desc, and_
+from sqlalchemy import select, delete, func, desc, and_, distinct
 from common.db import get_db
 from common.models import Conversation, Message, ItemCache, AiCallLog
 from common.schemas import MessageOut
@@ -162,7 +161,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     q_today_user_msg = select(func.count(Message.id)).where(
         and_(Message.role == "user", Message.created_at >= today_start)
     )
-    q_today_new_buyers = select(func.count(func.distinct(Conversation.user_id))).where(
+    q_today_new_buyers = select(func.count(distinct(Conversation.user_id))).where(
         Conversation.created_at >= today_start
     )
     q_today_takeover = select(func.count(Conversation.id)).where(
@@ -192,60 +191,36 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     # --- 累计 ---
     q_cum_conv = select(func.count(Conversation.id))
     q_cum_msg = select(func.count(Message.id))
-    q_cum_buyers = select(func.count(func.distinct(Conversation.user_id)))
+    q_cum_buyers = select(func.count(distinct(Conversation.user_id)))
     q_cum_bargain = select(func.count(Conversation.id)).where(Conversation.bargain_count > 0)
     q_cum_ai_calls = select(func.count(AiCallLog.id))
     q_cum_tokens = select(func.coalesce(func.sum(AiCallLog.total_tokens), 0))
 
-    # 并发执行
-    results = await asyncio.gather(
-        db.execute(q_realtime_manual_active),
-        db.execute(q_today_conv),
-        db.execute(q_today_msg),
-        db.execute(q_today_ai_reply),
-        db.execute(q_today_user_msg),
-        db.execute(q_today_new_buyers),
-        db.execute(q_today_takeover),
-        db.execute(q_today_ai_calls),
-        db.execute(q_today_tokens),
-        db.execute(q_today_ai_errors),
-        db.execute(q_today_avg_latency),
-        db.execute(q_today_intent_dist),
-        db.execute(q_today_agent_dist),
-        db.execute(q_cum_conv),
-        db.execute(q_cum_msg),
-        db.execute(q_cum_buyers),
-        db.execute(q_cum_bargain),
-        db.execute(q_cum_ai_calls),
-        db.execute(q_cum_tokens),
-    )
-
-    (
-        r_realtime_manual_active,
-        r_today_conv,
-        r_today_msg,
-        r_today_ai_reply,
-        r_today_user_msg,
-        r_today_new_buyers,
-        r_today_takeover,
-        r_today_ai_calls,
-        r_today_tokens,
-        r_today_ai_errors,
-        r_today_avg_latency,
-        r_today_intent_dist,
-        r_today_agent_dist,
-        r_cum_conv,
-        r_cum_msg,
-        r_cum_buyers,
-        r_cum_bargain,
-        r_cum_ai_calls,
-        r_cum_tokens,
-    ) = results
+    # 顺序执行（AsyncSession 不支持单 session 并发；19 个轻量聚合查询 ~95ms 完全可接受）
+    r_realtime_manual_active = await db.execute(q_realtime_manual_active)
+    r_today_conv = await db.execute(q_today_conv)
+    r_today_msg = await db.execute(q_today_msg)
+    r_today_ai_reply = await db.execute(q_today_ai_reply)
+    r_today_user_msg = await db.execute(q_today_user_msg)
+    r_today_new_buyers = await db.execute(q_today_new_buyers)
+    r_today_takeover = await db.execute(q_today_takeover)
+    r_today_ai_calls = await db.execute(q_today_ai_calls)
+    r_today_tokens = await db.execute(q_today_tokens)
+    r_today_ai_errors = await db.execute(q_today_ai_errors)
+    r_today_avg_latency = await db.execute(q_today_avg_latency)
+    r_today_intent_dist = await db.execute(q_today_intent_dist)
+    r_today_agent_dist = await db.execute(q_today_agent_dist)
+    r_cum_conv = await db.execute(q_cum_conv)
+    r_cum_msg = await db.execute(q_cum_msg)
+    r_cum_buyers = await db.execute(q_cum_buyers)
+    r_cum_bargain = await db.execute(q_cum_bargain)
+    r_cum_ai_calls = await db.execute(q_cum_ai_calls)
+    r_cum_tokens = await db.execute(q_cum_tokens)
 
     today_ai_calls = r_today_ai_calls.scalar() or 0
     today_ai_errors = r_today_ai_errors.scalar() or 0
     today_error_rate = (today_ai_errors / today_ai_calls) if today_ai_calls > 0 else 0.0
-    today_avg_latency = int(r_today_avg_latency.scalar() or 0)
+    today_avg_latency = int(round(r_today_avg_latency.scalar() or 0))
 
     intent_distribution = [
         {"name": name or "unknown", "count": int(count)}
@@ -254,7 +229,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     intent_distribution.sort(key=lambda x: x["count"], reverse=True)
 
     agent_distribution = [
-        {"name": name, "count": int(count)}
+        {"name": name or "unknown", "count": int(count)}
         for name, count in r_today_agent_dist.all()
     ]
     agent_distribution.sort(key=lambda x: x["count"], reverse=True)
