@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS ai_call_log (
     completion_tokens INT NOT NULL DEFAULT 0,
     total_tokens INT NOT NULL DEFAULT 0,
     latency_ms INT NOT NULL DEFAULT 0,
-    success TINYINT(1) NOT NULL DEFAULT 1,
+    success BOOLEAN NOT NULL DEFAULT TRUE,
     created_at DATETIME DEFAULT NOW(),
     INDEX idx_ai_log_created (created_at),
     INDEX idx_ai_log_agent_created (agent_name, created_at)
