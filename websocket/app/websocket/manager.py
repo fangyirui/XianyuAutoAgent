@@ -421,16 +421,21 @@ class XianyuLive:
         context = await self._get_context(conv.id)
         item_desc = f"当前商品的信息如下：{self.build_item_description(item_info)}"
         item_custom_prompt = await self._get_item_custom_prompt(item_id)
+        # 先落库 user 消息，保证 AI 返回 '-' 或抛异常时也留痕；context 已在落库前取，LLM 入参字节级不变
+        await self._add_message(conv.id, "user", send_message)
         logger.info(f"开始生成AI回复 | chat_id={chat_id}, 上下文条数={len(context)}, 商品额外提示词长度={len(item_custom_prompt)}")
-        bot_reply = await self.bot.generate_reply(
-            send_message, item_desc, context, item_custom_prompt=item_custom_prompt,
-        )
+        try:
+            bot_reply = await self.bot.generate_reply(
+                send_message, item_desc, context, item_custom_prompt=item_custom_prompt,
+            )
+        except Exception as e:
+            logger.error(f"AI生成回复异常，user 消息已留痕 | chat_id={chat_id}, err={e}")
+            return
 
         if bot_reply == "-":
             logger.info(f"AI返回'-'，不回复 | chat_id={chat_id}")
             return
 
-        await self._add_message(conv.id, "user", send_message)
         if self.bot.last_intent == "price":
             await self._increment_bargain(chat_id)
         await self._add_message(conv.id, "assistant", bot_reply)
