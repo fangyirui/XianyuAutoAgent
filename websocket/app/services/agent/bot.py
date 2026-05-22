@@ -136,6 +136,7 @@ class XianyuReplyBot:
         item_desc: str,
         context: List[Dict],
         item_custom_prompt: str | None = None,
+        chat_id: str | None = None,
     ) -> str:
         logger.info(f"[Bot] 开始处理 | 用户消息: {user_msg}")
         logger.debug(f"[Bot] 商品信息: {item_desc}")
@@ -143,7 +144,7 @@ class XianyuReplyBot:
 
         formatted_context = self.format_history(context)
         # IntentRouter / ClassifyAgent 不接收 item_custom_prompt（避免污染意图判断）
-        detected_intent = await self.router.detect(user_msg, item_desc, formatted_context)
+        detected_intent = await self.router.detect(user_msg, item_desc, formatted_context, chat_id=chat_id)
 
         if detected_intent == "no_reply":
             self.last_intent = "no_reply"
@@ -167,6 +168,7 @@ class XianyuReplyBot:
             context=formatted_context,
             bargain_count=bargain_count,
             item_custom_prompt=item_custom_prompt,
+            chat_id=chat_id,
         )
         logger.info(f"[Bot] 最终回复: {reply}")
         return reply

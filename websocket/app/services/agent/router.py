@@ -16,7 +16,7 @@ class IntentRouter:
         }
         self.classify_agent = classify_agent
 
-    async def detect(self, user_msg: str, item_desc: str, context: str) -> str:
+    async def detect(self, user_msg: str, item_desc: str, context: str, chat_id: str | None = None) -> str:
         text_clean = re.sub(r"[^\w一-龥]", "", user_msg)
 
         if any(kw in text_clean for kw in self.rules["tech"]["keywords"]):
@@ -37,7 +37,7 @@ class IntentRouter:
 
         logger.info(f"[IntentRouter] 规则未命中，调用ClassifyAgent | 原文: {user_msg}")
         result = await self.classify_agent.generate(
-            user_msg=user_msg, item_desc=item_desc, context=context
+            user_msg=user_msg, item_desc=item_desc, context=context, chat_id=chat_id
         )
         logger.info(f"[IntentRouter] ClassifyAgent返回意图: {result}")
         return result

@@ -426,7 +426,7 @@ class XianyuLive:
         logger.info(f"开始生成AI回复 | chat_id={chat_id}, 上下文条数={len(context)}, 商品额外提示词长度={len(item_custom_prompt)}")
         try:
             bot_reply = await self.bot.generate_reply(
-                send_message, item_desc, context, item_custom_prompt=item_custom_prompt,
+                send_message, item_desc, context, item_custom_prompt=item_custom_prompt, chat_id=chat_id,
             )
         except Exception as e:
             logger.error(f"AI生成回复异常，user 消息已留痕 | chat_id={chat_id}, err={e}")
