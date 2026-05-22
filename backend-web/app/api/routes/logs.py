@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, and_
+from sqlalchemy import select, delete, func, desc, and_
 from common.db import get_db
 from common.models import Conversation, Message, ItemCache
 from common.schemas import MessageOut
 from app.api.deps import get_current_user
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 router = APIRouter(prefix="/logs", tags=["logs"], dependencies=[Depends(get_current_user)])
@@ -29,7 +29,7 @@ class ConversationListItem(BaseModel):
     updated_at: datetime
 
 
-@router.get("/conversations", response_model=List[ConversationListItem])
+@router.get("/conversations")
 async def list_conversations(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -38,12 +38,19 @@ async def list_conversations(
 ):
     offset = (page - 1) * page_size
     query = select(Conversation)
+    count_query = select(func.count(Conversation.id))
     if keyword:
-        query = query.where(
+        cond = (
             Conversation.chat_id.contains(keyword)
             | Conversation.user_id.contains(keyword)
             | Conversation.item_id.contains(keyword)
         )
+        query = query.where(cond)
+        count_query = count_query.where(cond)
+
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
     result = await db.execute(
         query.order_by(desc(Conversation.updated_at)).offset(offset).limit(page_size)
     )
@@ -103,7 +110,7 @@ async def list_conversations(
             updated_at=c.updated_at,
         ))
 
-    return items
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @router.get("/conversations/{chat_id}/messages", response_model=List[MessageOut])
@@ -116,6 +123,26 @@ async def get_messages(chat_id: str, db: AsyncSession = Depends(get_db)):
         select(Message).where(Message.conversation_id == conv.id).order_by(Message.created_at)
     )
     return result.scalars().all()
+
+
+class BatchDeleteRequest(BaseModel):
+    chat_ids: List[str] = Field(..., min_length=1, max_length=500)
+
+
+@router.delete("/conversations/{chat_id}")
+async def delete_conversation(chat_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(delete(Conversation).where(Conversation.chat_id == chat_id))
+    await db.commit()
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {"deleted": result.rowcount}
+
+
+@router.post("/conversations/batch-delete")
+async def batch_delete_conversations(payload: BatchDeleteRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(delete(Conversation).where(Conversation.chat_id.in_(payload.chat_ids)))
+    await db.commit()
+    return {"deleted": result.rowcount}
 
 
 @router.get("/stats")
