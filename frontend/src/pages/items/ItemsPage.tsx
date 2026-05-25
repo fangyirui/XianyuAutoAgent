@@ -297,7 +297,7 @@ export default function ItemsPage() {
                                 className="h-3.5 w-3.5 accent-primary-500"
                               />
                               <span className={replyEnabledDraft ? 'text-emerald-300' : 'text-dark-400'}>
-                                {replyEnabledDraft ? '已启用（将跳过 AI 直接回复）' : '已禁用'}
+                                {replyEnabledDraft ? '已启用（每会话首条消息回复一次，之后转 AI）' : '已禁用'}
                               </span>
                             </label>
                             <textarea
@@ -306,7 +306,7 @@ export default function ItemsPage() {
                               maxLength={500}
                               rows={3}
                               className="input !p-2.5 text-xs"
-                              placeholder="启用后，所有买家消息都会收到这段固定回复，跳过 AI 生成"
+                              placeholder="启用后，仅对每个会话的第一条买家消息回复这段固定文本，之后交给 AI"
                             />
                             <div className="flex gap-2 items-center">
                               <button onClick={() => saveReply(item)} disabled={savingReply} className="btn btn-primary btn-sm">

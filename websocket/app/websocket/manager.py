@@ -136,6 +136,16 @@ class XianyuLive:
             text = (row[0] or "").strip() if row[0] else ""
             return text if (enabled and text) else ""
 
+    async def _has_user_message(self, conversation_id: int) -> bool:
+        """会话是否已有买家（role='user'）消息。用于判定本条是否为会话首条买家消息。"""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Message.id)
+                .where(Message.conversation_id == conversation_id, Message.role == "user")
+                .limit(1)
+            )
+            return result.first() is not None
+
     async def _is_my_item(self, item_id: str) -> bool:
         """item_cache 表里是否存在归属于当前卖家的此商品。"""
         async with AsyncSessionLocal() as db:
@@ -394,16 +404,17 @@ class XianyuLive:
             logger.info(f"商品 {item_id} 不属于当前卖家 {self.myid}，跳过自动回复 | chat_id={chat_id}")
             return
 
-        # 商品级默认回复门控：启用且文本非空时短路 AI 流程，直接发固定文本。
-        # 默认（disabled 或文本为空）下返回空串，主流程字节级不变。
+        # 商品级默认回复门控：启用且文本非空时，仅对会话首条买家消息短路 AI 直接发固定文本，
+        # 之后该会话穿透到正常 AI 流程。默认（disabled 或文本为空）下返回空串，主流程字节级不变。
         default_reply = await self._get_item_default_reply(item_id)
         if default_reply:
             conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
-            await self._add_message(conv.id, "user", send_message)
-            await self._add_message(conv.id, "assistant", default_reply)
-            logger.info(f"使用商品默认回复 | chat_id={chat_id}, item_id={item_id}, reply={default_reply}")
-            await self.send_msg(ws, chat_id, send_user_id, default_reply)
-            return
+            if not await self._has_user_message(conv.id):
+                await self._add_message(conv.id, "user", send_message)
+                await self._add_message(conv.id, "assistant", default_reply)
+                logger.info(f"使用商品默认回复(首条) | chat_id={chat_id}, item_id={item_id}, reply={default_reply}")
+                await self.send_msg(ws, chat_id, send_user_id, default_reply)
+                return
 
         item_info = await self._get_item_cache(item_id)
         if not item_info:
