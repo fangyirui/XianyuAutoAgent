@@ -233,15 +233,21 @@ export default function ItemsPage() {
                       <td className="text-right text-primary-400 whitespace-nowrap font-medium">{item.price > 0 ? `¥${item.price}` : '-'}</td>
                       <td
                         onClick={() => hasDesc && toggleExpand(item.id)}
-                        className={`max-w-md text-soft text-xs ${hasDesc ? 'cursor-pointer select-none' : ''} ${expanded ? 'whitespace-pre-line break-words' : 'truncate'}`}
+                        className={`max-w-md text-soft text-xs ${hasDesc ? 'cursor-pointer select-none' : ''} ${expanded ? 'whitespace-pre-line break-words' : ''}`}
                         title={hasDesc ? (expanded ? '点击收起' : '点击展开') : ''}
                       >
                         {hasDesc ? (
                           <span className="inline-flex items-start gap-1">
-                            <span className="text-dark-500 mt-0.5">
+                            <span className="text-dark-500 mt-0.5 flex-shrink-0">
                               {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                             </span>
-                            <span>{item.description}</span>
+                            <span>
+                              {expanded
+                                ? item.description
+                                : item.description.length > 30
+                                  ? `${item.description.slice(0, 30)}…`
+                                  : item.description}
+                            </span>
                           </span>
                         ) : (
                           '-'
