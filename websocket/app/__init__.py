@@ -8,10 +8,11 @@ from .core import log_buffer
 _live_instance = None
 _live_task = None
 _redis_task = None
+_mq_consumer = None
 
 
 async def _start_live(app_state=None):
-    global _live_instance, _live_task
+    global _live_instance, _live_task, _mq_consumer
 
     await settings.load_from_db()
 
@@ -20,6 +21,7 @@ async def _start_live(app_state=None):
         return
 
     from .websocket import XianyuLive
+    from .websocket.message_queue import MessageQueueConsumer
     from .api.routes.health import set_live_instance as set_health
     from .api.routes.control import set_live_instance as set_control
 
@@ -28,11 +30,16 @@ async def _start_live(app_state=None):
     set_health(_live_instance)
     set_control(_live_instance)
     _live_task = asyncio.create_task(_live_instance.run())
+    # 消息队列消费者：持有 live 引用，soft_reload 换 bot 后无需重建
+    _mq_consumer = MessageQueueConsumer(_live_instance, _live_instance.redis)
+    await _mq_consumer.start()
     logger.info("WebSocket服务已启动")
 
 
 async def _stop_live():
-    global _live_instance, _live_task
+    global _live_instance, _live_task, _mq_consumer
+    if _mq_consumer:
+        await _mq_consumer.stop()
     if _live_instance:
         await _live_instance.stop()
     if _live_task:
@@ -41,6 +48,7 @@ async def _stop_live():
             await _live_task
         except asyncio.CancelledError:
             pass
+    _mq_consumer = None
     _live_instance = None
     _live_task = None
 

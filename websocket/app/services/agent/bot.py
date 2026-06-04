@@ -137,7 +137,13 @@ class XianyuReplyBot:
         context: List[Dict],
         item_custom_prompt: str | None = None,
         chat_id: str | None = None,
-    ) -> str:
+    ) -> tuple[str, str]:
+        """返回 (reply, intent)。
+
+        历史上意图存在 self.last_intent，但多 worker 并发消费时该共享字段会跨任务串改，
+        故改为随返回值带出，调用方不要再读 self.last_intent。self.last_intent 仍同步写入
+        以兼容潜在的其它读取点，但不应作为并发安全的事实来源。
+        """
         logger.info(f"[Bot] 开始处理 | 用户消息: {user_msg}")
         logger.debug(f"[Bot] 商品信息: {item_desc}")
         logger.debug(f"[Bot] 上下文条数: {len(context)}, 商品额外提示词={'有' if item_custom_prompt else '无'}")
@@ -149,17 +155,18 @@ class XianyuReplyBot:
         if detected_intent == "no_reply":
             self.last_intent = "no_reply"
             logger.info("[Bot] 意图=no_reply，跳过回复")
-            return "-"
+            return "-", "no_reply"
 
         internal_intents = {"classify"}
         if detected_intent in self.agents and detected_intent not in internal_intents:
             agent = self.agents[detected_intent]
-            self.last_intent = detected_intent
+            intent = detected_intent
         else:
             agent = self.agents["default"]
-            self.last_intent = "default"
+            intent = "default"
+        self.last_intent = intent
 
-        logger.info(f"[Bot] 最终意图={self.last_intent}，使用 {agent.__class__.__name__}")
+        logger.info(f"[Bot] 最终意图={intent}，使用 {agent.__class__.__name__}")
 
         bargain_count = self._extract_bargain_count(context)
         reply = await agent.generate(
@@ -171,7 +178,7 @@ class XianyuReplyBot:
             chat_id=chat_id,
         )
         logger.info(f"[Bot] 最终回复: {reply}")
-        return reply
+        return reply, intent
 
     def _extract_bargain_count(self, context: List[Dict]) -> int:
         for msg in context:

@@ -45,6 +45,19 @@ class Settings(BaseSettings):
     WEBSOCKET_SERVICE_URL: str = "http://localhost:8090"
     BACKEND_WEB_URL: str = "http://localhost:8089"
 
+    # ── 消息队列（Redis Stream 可靠投递）────────────────────────────────
+    # 买家消息先入 Stream，由同进程 worker 消费：AI 生成→发送，成功才 XACK；
+    # 失败留 PEL 由 reclaimer 重投。彻底解决 AI/发送报错导致买家消息无人回复。
+    MQ_WORKER_COUNT: int = 4            # 分片 worker 数：同 chat_id 串行、跨 chat_id 并发
+    MQ_MAX_DELIVERIES: int = 5          # 单条最大投递次数，超过进死信流
+    MQ_INLINE_RETRY: int = 2            # worker 内联快重试次数（兜瞬时抖动，不经 reclaimer）
+    MQ_INLINE_RETRY_BASE_MS: int = 500  # 内联重试退避基值（指数：base*2^n）
+    MQ_RECLAIM_IDLE_MS: int = 60000     # PEL 消息空闲多久可被 reclaim（> 单条最大处理耗时，防误抢在途）
+    MQ_RECLAIM_INTERVAL: int = 15       # reclaimer 轮询间隔（秒）
+    MQ_READ_BLOCK_MS: int = 5000        # XREADGROUP 阻塞读超时（毫秒）
+    MQ_DEDUP_TTL: int = 600             # 去重标记 replied:{id} 存活秒数（>= 消息时效即可）
+    # 新鲜度上限复用 MESSAGE_EXPIRE_TIME（毫秒）：age 超过则放弃发送，不回复过期消息
+
     LOG_LEVEL: str = "INFO"
 
     @property

@@ -25,11 +25,15 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD:-xianyu_redis_123}
+    # 开启 AOF 持久化：消息队列（stream:messages）落盘，Redis 重启/部署不丢未消费的买家消息。
+    # everysec：最多丢 ~1s 写入，对本场景足够（上游闲鱼消息不会重投，目标是扛住常规重启）。
+    command: redis-server --requirepass ${REDIS_PASSWORD:-xianyu_redis_123} --appendonly yes --appendfsync everysec
     environment:
       TZ: Asia/Shanghai
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     networks:
       - internal
     healthcheck:
@@ -95,3 +99,4 @@ networks:
 
 volumes:
   mysql_data:
+  redis_data:

@@ -8,7 +8,7 @@ from loguru import logger
 from datetime import datetime
 from sqlalchemy import select, update, func
 from common.core import settings
-from common.db import AsyncSessionLocal
+from common.db import AsyncSessionLocal, redis_client
 from common.models import Conversation, Message, ItemCache
 from common.utils import generate_mid, generate_uuid, generate_device_id, trans_cookies
 from ..services.xianyu import XianyuApis, TokenManager
@@ -17,6 +17,7 @@ from ..services.xianyu.message_handler import (
     is_bracket_system_message, decrypt_sync_data,
 )
 from ..services.agent import XianyuReplyBot
+from .message_queue import enqueue
 
 
 class XianyuLive:
@@ -30,6 +31,7 @@ class XianyuLive:
         self.apis = XianyuApis(cookies_str)
         self.token_mgr = TokenManager(self.apis, self.device_id)
         self.bot = XianyuReplyBot()
+        self.redis = redis_client
 
         self.ws = None
         self.heartbeat_interval = settings.HEARTBEAT_INTERVAL
@@ -92,7 +94,8 @@ class XianyuLive:
 
     async def _add_message(self, conversation_id: int, role: str, content: str, last_intent: str = None):
         async with AsyncSessionLocal() as db:
-            db.add(Message(conversation_id=conversation_id, role=role, content=content))
+            msg = Message(conversation_id=conversation_id, role=role, content=content)
+            db.add(msg)
             # 同步刷新会话行：让 updated_at 反映"最后一条消息时间"（列表按它倒序排序）。
             # last_intent 仅在调用方显式传入时写回（assistant 落库时），其余消息不动该列。
             values = {"updated_at": func.now()}
@@ -102,11 +105,24 @@ class XianyuLive:
                 update(Conversation).where(Conversation.id == conversation_id).values(**values)
             )
             await db.commit()
+            await db.refresh(msg)
+            return msg.id
 
     async def _get_context(self, conversation_id: int, limit: int = 50) -> list:
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at).limit(limit)
+            )
+            return [{"role": m.role, "content": m.content} for m in result.scalars().all()]
+
+    async def _get_context_before(self, conversation_id: int, before_id: int, limit: int = 50) -> list:
+        """取 id < before_id 的历史。用于重投时重建"当前消息落库前"的上下文，
+        使重试的 LLM 入参与首次尝试一致（不让当前消息出现在自己的历史里）。"""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Message)
+                .where(Message.conversation_id == conversation_id, Message.id < before_id)
+                .order_by(Message.created_at).limit(limit)
             )
             return [{"role": m.role, "content": m.content} for m in result.scalars().all()]
 
@@ -412,6 +428,89 @@ class XianyuLive:
             logger.info(f"商品 {item_id} 不属于当前卖家 {self.myid}，跳过自动回复 | chat_id={chat_id}")
             return
 
+        # 入队：后续"默认回复 / 取详情 / AI 生成 / 发送"全部交给消息队列 worker 可靠消费
+        # （成功才 XACK，失败留 PEL 自动重投），避免 AI 报错 / 发送报错导致买家消息无人回复。
+        # 此处仅保留无副作用的入口门控；产生回复的逻辑统一在 process_job 中执行。
+        await enqueue(self.redis, {
+            "chat_id": chat_id,
+            "send_user_id": send_user_id,
+            "item_id": item_id,
+            "send_message": send_message,
+            "sender_nickname": sender_nickname or "",
+            "create_time": create_time,
+        })
+        logger.info(f"消息已入队待处理 | chat_id={chat_id}, item_id={item_id}")
+
+    async def process_job(self, entry_id: str, fields: dict) -> str:
+        """消费一条队列消息：默认回复门控 / 取详情 / AI 生成 / 发送。
+
+        返回值约定（consumer 据此决定 XACK 还是留 PEL）：
+          done    成功发送（或 '-' 无需回复）→ XACK
+          skip    已完成过（重投 / ack 丢失）→ XACK
+          drop    过期，不再回复 → XACK
+          retry   可重试失败（AI 报错 / 详情API失败 / 发送失败 / WS 未连）→ 不 XACK，留 PEL
+
+        幂等：用 mq:committed:{id} / mq:done:{id} 两个标记保证重投不重复调用 AI、不重复落库；
+        一旦回复文本提交（committed），发送失败的重投只重发已提交文本，不再生成、不污染上下文。
+        """
+        done_key = f"mq:done:{entry_id}"
+        committed_key = f"mq:committed:{entry_id}"
+        ttl = settings.MQ_DEDUP_TTL
+
+        chat_id = fields.get("chat_id", "")
+        send_user_id = fields.get("send_user_id", "")
+        item_id = fields.get("item_id", "")
+        send_message = fields.get("send_message", "")
+        # 与原 handle_message 一致：空昵称传 "" 而非 None（_get_or_create_conversation 同等对待，
+        # 但建会话时 user_nickname 列保持 "" 而非 NULL，保证与改动前字节一致）
+        sender_nickname = fields.get("sender_nickname", "")
+
+        # 已完整发送过（重投 / ack 丢失）→ 跳过，避免重复回复
+        if await self.redis.exists(done_key):
+            logger.debug(f"消息已完成，跳过重投 | id={entry_id}")
+            return "skip"
+
+        # 新鲜度复检：过期消息不再回复（与 handle_message 入队前的过期门同一语义）
+        try:
+            create_time = int(fields.get("create_time", "0"))
+        except (ValueError, TypeError):
+            create_time = 0
+        if create_time > 0 and (time.time() * 1000 - create_time) > self.message_expire_time:
+            logger.info(f"队列消息已过期，丢弃不回复 | id={entry_id}, chat_id={chat_id}")
+            return "drop"
+
+        # ── 重发路径：上次已生成并落库、仅发送失败（或发送后崩溃未及 ack）──
+        committed = await self.redis.get(committed_key)
+        if committed:
+            try:
+                data = json.loads(committed)
+            except Exception:
+                data = None
+            if data:
+                if not self.is_connected:
+                    logger.warning(f"重发但 WS 未连接，待重连后重试 | id={entry_id}")
+                    return "retry"
+                try:
+                    await self.send_msg(self.ws, data["chat_id"], data["toid"], data["reply"])
+                except Exception as e:
+                    logger.warning(f"重发失败，留 PEL | id={entry_id}: {e}")
+                    return "retry"
+                await self.redis.setex(done_key, ttl, "1")
+                logger.info(f"重发成功 | id={entry_id}, chat_id={data['chat_id']}")
+                return "done"
+
+        return await self._process_fresh(
+            entry_id, done_key, committed_key, ttl,
+            chat_id, send_user_id, item_id, send_message, sender_nickname,
+        )
+
+    async def _process_fresh(
+        self, entry_id, done_key, committed_key, ttl,
+        chat_id, send_user_id, item_id, send_message, sender_nickname,
+    ) -> str:
+        """首次处理（未 committed）：逻辑逐行搬自原 handle_message 内联段，
+        默认配置下 LLM 入参与发送字节级不变。差异仅在于：发送前先把已生成的回复
+        写入 committed_key，使"发送失败重投"只重发不再生成。"""
         # 商品级默认回复门控：启用且文本非空时，仅对会话首条买家消息短路 AI 直接发固定文本，
         # 之后该会话穿透到正常 AI 流程。默认（disabled 或文本为空）下返回空串，主流程字节级不变。
         default_reply = await self._get_item_default_reply(item_id)
@@ -421,51 +520,95 @@ class XianyuLive:
                 await self._add_message(conv.id, "user", send_message)
                 await self._add_message(conv.id, "assistant", default_reply)
                 logger.info(f"使用商品默认回复(首条) | chat_id={chat_id}, item_id={item_id}, reply={default_reply}")
-                await self.send_msg(ws, chat_id, send_user_id, default_reply)
-                return
+                await self.redis.setex(
+                    committed_key, ttl,
+                    json.dumps({"chat_id": chat_id, "toid": send_user_id, "reply": default_reply}),
+                )
+                if not self.is_connected:
+                    logger.warning(f"WS 未连接，默认回复待重连后发送 | id={entry_id}")
+                    return "retry"
+                try:
+                    await self.send_msg(self.ws, chat_id, send_user_id, default_reply)
+                except Exception as e:
+                    logger.warning(f"默认回复发送失败，留 PEL | id={entry_id}: {e}")
+                    return "retry"
+                await self.redis.setex(done_key, ttl, "1")
+                return "done"
 
         item_info = await self._get_item_cache(item_id)
         if not item_info:
             logger.info(f"商品详情未命中，调用详情API补全 | item_id={item_id}")
-            api_result = await self.apis.get_item_info(item_id)
+            try:
+                api_result = await self.apis.get_item_info(item_id)
+            except Exception as e:
+                logger.warning(f"详情API异常，留 PEL 重试 | item_id={item_id}: {e}")
+                return "retry"
             if "data" in api_result and "itemDO" in api_result["data"]:
                 item_info = api_result["data"]["itemDO"]
                 await self._save_item_cache(item_id, item_info)
                 logger.info(f"商品详情已缓存 | item_id={item_id}, title={item_info.get('title', '')}")
             else:
                 logger.warning(f"获取商品详情失败 | item_id={item_id}, response_keys={list(api_result.keys())}")
-                return
+                return "retry"
 
         conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
-        context = await self._get_context(conv.id)
         item_desc = f"当前商品的信息如下：{self.build_item_description(item_info)}"
         item_custom_prompt = await self._get_item_custom_prompt(item_id)
-        # 先落库 user 消息，保证 AI 返回 '-' 或抛异常时也留痕；context 已在落库前取，LLM 入参字节级不变
-        await self._add_message(conv.id, "user", send_message)
+
+        # 留痕 user 消息 —— 仅一次。重投（上次 AI 失败、未 commit）时复用同一行，
+        # 并据其 id 重建"落库前"的上下文，保证重试与首次的 LLM 入参字节级一致。
+        usermsg_key = f"mq:usermsg:{entry_id}"
+        prior = await self.redis.get(usermsg_key)
+        if prior:
+            user_msg_id = int(prior)
+            context = await self._get_context_before(conv.id, user_msg_id)
+        else:
+            context = await self._get_context(conv.id)
+            user_msg_id = await self._add_message(conv.id, "user", send_message)
+            await self.redis.setex(usermsg_key, ttl, str(user_msg_id))
         logger.info(f"开始生成AI回复 | chat_id={chat_id}, 上下文条数={len(context)}, 商品额外提示词长度={len(item_custom_prompt)}")
         try:
-            bot_reply = await self.bot.generate_reply(
+            bot_reply, intent = await self.bot.generate_reply(
                 send_message, item_desc, context, item_custom_prompt=item_custom_prompt, chat_id=chat_id,
             )
         except Exception as e:
-            logger.error(f"AI生成回复异常，user 消息已留痕 | chat_id={chat_id}, err={e}")
-            return
+            logger.error(f"AI生成回复异常，user 消息已留痕，留 PEL 重试 | chat_id={chat_id}, err={e}")
+            return "retry"
 
         if bot_reply == "-":
             logger.info(f"AI返回'-'，不回复 | chat_id={chat_id}")
-            return
+            await self.redis.setex(done_key, ttl, "1")
+            return "done"
 
-        if self.bot.last_intent == "price":
-            await self._increment_bargain(chat_id)
-        await self._add_message(conv.id, "assistant", bot_reply, last_intent=self.bot.last_intent)
-        logger.info(f"AI回复完成 | chat_id={chat_id}, 意图={self.bot.last_intent}, 回复: {bot_reply}")
+        # 提交：递增议价、落库 assistant、写 committed —— 这些副作用只发生一次。
+        # 写 committed 之后即便发送失败，重投也只走"重发路径"，不再生成、不再落库、不再递增。
+        # 议价计数单独用 NX 标记守护：即便在 add_message/commit 之间发生 DB 失败导致整体重投，
+        # 也不会把同一条消息的议价轮次重复累加（会影响 PriceAgent 的 temperature）。
+        if intent == "price":
+            if await self.redis.set(f"mq:incr:{entry_id}", "1", nx=True, ex=ttl):
+                await self._increment_bargain(chat_id)
+        await self._add_message(conv.id, "assistant", bot_reply, last_intent=intent)
+        await self.redis.setex(
+            committed_key, ttl,
+            json.dumps({"chat_id": chat_id, "toid": send_user_id, "reply": bot_reply}),
+        )
+        logger.info(f"AI回复完成 | chat_id={chat_id}, 意图={intent}, 回复: {bot_reply}")
 
         if self.simulate_human_typing:
             delay = min(random.uniform(0, 1) + len(bot_reply) * random.uniform(0.1, 0.3), 10.0)
             logger.debug(f"模拟打字延迟 {delay:.1f}s")
             await asyncio.sleep(delay)
 
-        await self.send_msg(ws, chat_id, send_user_id, bot_reply)
+        if not self.is_connected:
+            logger.warning(f"WS 未连接，回复待重连后发送 | id={entry_id}")
+            return "retry"
+        try:
+            await self.send_msg(self.ws, chat_id, send_user_id, bot_reply)
+        except Exception as e:
+            logger.warning(f"发送失败，留 PEL 重发 | id={entry_id}: {e}")
+            return "retry"
+        await self.redis.setex(done_key, ttl, "1")
+        return "done"
 
     async def heartbeat_loop(self, ws):
         while True:

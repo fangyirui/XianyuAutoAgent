@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-XianyuAutoAgent 是一个闲鱼平台 AI 自动客服机器人。通过 WebSocket 长连接接入闲鱼消息系统，利用 LLM 多 Agent 协同实现 7×24 小时自动回复买家咨询。系统采用 docker-compose 编排的微服务架构：MySQL/Redis 提供持久化与缓存，websocket 服务负责闲鱼长连与对话生成，backend-web 提供管理 API，frontend 是 Vue 控制台。
+XianyuAutoAgent 是一个闲鱼平台 AI 自动客服机器人。通过 WebSocket 长连接接入闲鱼消息系统，利用 LLM 多 Agent 协同实现 7×24 小时自动回复买家咨询。系统采用 docker-compose 编排的微服务架构：MySQL 提供持久化，Redis 负责刷新令牌存储与跨服务配置热重载消息总线，websocket 服务负责闲鱼长连与对话生成，backend-web 提供管理 API，frontend 是 Vue 控制台。
 
 ## 运行方式
 
@@ -82,7 +82,7 @@ docker compose logs -f backend-web
 - `system_config` — 可在线编辑的系统配置与提示词
 - `sellers` — 卖家 Cookie 池，支持多卖家
 
-**Redis** — 会话/缓存/实时日志通道。
+**Redis** — 三个用途：1）存储 JWT 刷新令牌（key `refresh_token:{token}`，带 TTL，续签时旧令牌即删）；2）跨服务配置热重载的发布/订阅通道（频道 `config:reload`）。backend-web 改配置后 publish 信号，websocket 服务的 `_redis_subscriber` 订阅消费：`cookie_updated`/`qrlogin` 触发完整重连，`env_updated`/`prompt_updated` 触发软重载（保持长连接）；3）买家消息可靠投递队列（Redis Stream `stream:messages` + 消费组 `cg:messages`，见 `websocket/app/websocket/message_queue.py`）——消息经 `handle_message` 全部门控后入队，由 websocket 进程内的 consumer 消费（取详情→AI生成→发送，成功才 XACK，失败留 PEL 自动重投），彻底解决 AI/发送报错导致买家消息无人回复。为此 Redis 开启了 AOF 持久化（compose 中 `--appendonly yes`，挂 `redis_data` 卷），重启不丢未消费消息。会话与商品缓存仍在 MySQL，实时日志走内存环形缓冲 `log_buffer`。
 
 ## 提示词系统
 
