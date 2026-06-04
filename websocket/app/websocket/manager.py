@@ -6,7 +6,7 @@ import random
 import websockets
 from loguru import logger
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import select, update, func
 from common.core import settings
 from common.db import AsyncSessionLocal
 from common.models import Conversation, Message, ItemCache
@@ -90,9 +90,17 @@ class XianyuLive:
                 await db.refresh(conv)
             return conv
 
-    async def _add_message(self, conversation_id: int, role: str, content: str):
+    async def _add_message(self, conversation_id: int, role: str, content: str, last_intent: str = None):
         async with AsyncSessionLocal() as db:
             db.add(Message(conversation_id=conversation_id, role=role, content=content))
+            # 同步刷新会话行：让 updated_at 反映"最后一条消息时间"（列表按它倒序排序）。
+            # last_intent 仅在调用方显式传入时写回（assistant 落库时），其余消息不动该列。
+            values = {"updated_at": func.now()}
+            if last_intent is not None:
+                values["last_intent"] = last_intent
+            await db.execute(
+                update(Conversation).where(Conversation.id == conversation_id).values(**values)
+            )
             await db.commit()
 
     async def _get_context(self, conversation_id: int, limit: int = 50) -> list:
@@ -449,7 +457,7 @@ class XianyuLive:
 
         if self.bot.last_intent == "price":
             await self._increment_bargain(chat_id)
-        await self._add_message(conv.id, "assistant", bot_reply)
+        await self._add_message(conv.id, "assistant", bot_reply, last_intent=self.bot.last_intent)
         logger.info(f"AI回复完成 | chat_id={chat_id}, 意图={self.bot.last_intent}, 回复: {bot_reply}")
 
         if self.simulate_human_typing:
