@@ -430,7 +430,7 @@ class XianyuLive:
 
         # 入队：后续"默认回复 / 取详情 / AI 生成 / 发送"全部交给消息队列 worker 可靠消费
         # （成功才 XACK，失败留 PEL 自动重投），避免 AI 报错 / 发送报错导致买家消息无人回复。
-        # 此处仅保留无副作用的入口门控；产生回复的逻辑统一在 process_job 中执行。
+        # 此处仅保留无副作用的入口门控；产生回复的逻辑统一在 process_job_batch 中执行。
         await enqueue(self.redis, {
             "chat_id": chat_id,
             "send_user_id": send_user_id,
@@ -441,42 +441,68 @@ class XianyuLive:
         })
         logger.info(f"消息已入队待处理 | chat_id={chat_id}, item_id={item_id}")
 
-    async def process_job(self, entry_id: str, fields: dict) -> str:
-        """消费一条队列消息：默认回复门控 / 取详情 / AI 生成 / 发送。
+    @staticmethod
+    def _batch_text(batch: list) -> str:
+        """合并一批买家消息为单条"当前消息"喂给 AI。批大小=1 时即原文本身，
+        保证单条消息的 LLM 入参与改动前字节级一致。"""
+        return "\n".join(f.get("send_message", "") for _, f in batch)
 
-        返回值约定（consumer 据此决定 XACK 还是留 PEL）：
-          done    成功发送（或 '-' 无需回复）→ XACK
-          skip    已完成过（重投 / ack 丢失）→ XACK
-          drop    过期，不再回复 → XACK
-          retry   可重试失败（AI 报错 / 详情API失败 / 发送失败 / WS 未连）→ 不 XACK，留 PEL
+    @staticmethod
+    def _batch_newest_ct(batch: list) -> int:
+        """批内最新一条的 create_time（毫秒）。新鲜度按最新条判定——缓冲期再长，
+        只要最后一条仍在时效内就回复，不因合并等待把整批判过期。"""
+        cts = []
+        for _, f in batch:
+            try:
+                cts.append(int(f.get("create_time", "0")))
+            except (ValueError, TypeError):
+                pass
+        return max(cts) if cts else 0
 
-        幂等：用 mq:committed:{id} / mq:done:{id} 两个标记保证重投不重复调用 AI、不重复落库；
-        一旦回复文本提交（committed），发送失败的重投只重发已提交文本，不再生成、不污染上下文。
-        """
-        done_key = f"mq:done:{entry_id}"
-        committed_key = f"mq:committed:{entry_id}"
+    async def _mark_done(self, ids: list, ttl: int):
+        """标记批内每条消息均已并入一次已发送的回复。按成员粒度打标，使任一成员
+        被 reclaim 重投时都能识别"已处理"，杜绝拆批重投导致的重复回复。"""
+        for entry_id in ids:
+            await self.redis.setex(f"mq:mdone:{entry_id}", ttl, "1")
+
+    async def process_job_batch(self, batch: list) -> str:
+        """消费一整批（同一 chat_id 去抖合并后的若干条）买家消息，合并成一次 AI 回复。
+
+        返回值约定（consumer 据此决定整批 XACK 还是整批留 PEL）：
+          done    成功发送（或 '-' 无需回复 / 全部已处理）→ 整批 XACK
+          drop    整批过期，不再回复 → 整批 XACK
+          retry   可重试失败（AI 报错 / 详情API失败 / 发送失败 / WS 未连）→ 整批留 PEL
+
+        幂等以 batch_key（批内最小 entry_id）为主键：mq:bcommit / mq:umsg / mq:bincr
+        各只发生一次；mq:mdone:{每个成员} 在成功发送后逐条打标。一旦回复文本提交
+        （bcommit），发送失败的重投只重发已提交文本，不再生成、不污染上下文。"""
+        batch = sorted(batch, key=lambda x: x[0])  # 按 stream id 升序 = 到达顺序
+        ids = [e for e, _ in batch]
+        batch_key = ids[0]
         ttl = settings.MQ_DEDUP_TTL
+        committed_key = f"mq:bcommit:{batch_key}"
 
-        chat_id = fields.get("chat_id", "")
-        send_user_id = fields.get("send_user_id", "")
-        item_id = fields.get("item_id", "")
-        send_message = fields.get("send_message", "")
-        # 与原 handle_message 一致：空昵称传 "" 而非 None（_get_or_create_conversation 同等对待，
-        # 但建会话时 user_nickname 列保持 "" 而非 NULL，保证与改动前字节一致）
-        sender_nickname = fields.get("sender_nickname", "")
+        first = batch[0][1]
+        chat_id = first.get("chat_id", "")
+        send_user_id = first.get("send_user_id", "")
+        item_id = first.get("item_id", "")
+        # 与原 handle_message 一致：空昵称传 "" 而非 None
+        sender_nickname = first.get("sender_nickname", "")
 
-        # 已完整发送过（重投 / ack 丢失）→ 跳过，避免重复回复
-        if await self.redis.exists(done_key):
-            logger.debug(f"消息已完成，跳过重投 | id={entry_id}")
-            return "skip"
+        # 全部成员已并入过某次已发送回复（重投 / ack 丢失）→ 跳过，避免重复回复
+        all_done = True
+        for entry_id in ids:
+            if not await self.redis.exists(f"mq:mdone:{entry_id}"):
+                all_done = False
+                break
+        if all_done:
+            logger.debug(f"批全部已完成，跳过重投 | ids={ids}")
+            return "done"
 
-        # 新鲜度复检：过期消息不再回复（与 handle_message 入队前的过期门同一语义）
-        try:
-            create_time = int(fields.get("create_time", "0"))
-        except (ValueError, TypeError):
-            create_time = 0
-        if create_time > 0 and (time.time() * 1000 - create_time) > self.message_expire_time:
-            logger.info(f"队列消息已过期，丢弃不回复 | id={entry_id}, chat_id={chat_id}")
+        # 新鲜度复检：按最新一条判定，整批过期才丢弃
+        newest_ct = self._batch_newest_ct(batch)
+        if newest_ct > 0 and (time.time() * 1000 - newest_ct) > self.message_expire_time:
+            logger.info(f"队列批已过期，丢弃不回复 | ids={ids}, chat_id={chat_id}")
             return "drop"
 
         # ── 重发路径：上次已生成并落库、仅发送失败（或发送后崩溃未及 ack）──
@@ -488,36 +514,40 @@ class XianyuLive:
                 data = None
             if data:
                 if not self.is_connected:
-                    logger.warning(f"重发但 WS 未连接，待重连后重试 | id={entry_id}")
+                    logger.warning(f"重发但 WS 未连接，待重连后重试 | ids={ids}")
                     return "retry"
                 try:
                     await self.send_msg(self.ws, data["chat_id"], data["toid"], data["reply"])
                 except Exception as e:
-                    logger.warning(f"重发失败，留 PEL | id={entry_id}: {e}")
+                    logger.warning(f"批重发失败，留 PEL | ids={ids}: {e}")
                     return "retry"
-                await self.redis.setex(done_key, ttl, "1")
-                logger.info(f"重发成功 | id={entry_id}, chat_id={data['chat_id']}")
+                await self._mark_done(ids, ttl)
+                logger.info(f"批重发成功 | ids={ids}, chat_id={data['chat_id']}")
                 return "done"
 
-        return await self._process_fresh(
-            entry_id, done_key, committed_key, ttl,
-            chat_id, send_user_id, item_id, send_message, sender_nickname,
+        return await self._process_fresh_batch(
+            batch, ids, batch_key, committed_key, ttl,
+            chat_id, send_user_id, item_id, sender_nickname,
         )
 
-    async def _process_fresh(
-        self, entry_id, done_key, committed_key, ttl,
-        chat_id, send_user_id, item_id, send_message, sender_nickname,
+
+    async def _process_fresh_batch(
+        self, batch, ids, batch_key, committed_key, ttl,
+        chat_id, send_user_id, item_id, sender_nickname,
     ) -> str:
-        """首次处理（未 committed）：逻辑逐行搬自原 handle_message 内联段，
-        默认配置下 LLM 入参与发送字节级不变。差异仅在于：发送前先把已生成的回复
-        写入 committed_key，使"发送失败重投"只重发不再生成。"""
-        # 商品级默认回复门控：启用且文本非空时，仅对会话首条买家消息短路 AI 直接发固定文本，
-        # 之后该会话穿透到正常 AI 流程。默认（disabled 或文本为空）下返回空串，主流程字节级不变。
+        """首次处理一批（未 committed）：把批内多条买家消息合并成一次 AI 回复。
+        批大小=1 时逐行等价于改动前的单条路径，默认配置下 LLM 入参与发送字节级不变。
+
+        与单条版差异：user 消息按成员各自落库（保真历史），但喂给 AI 的"当前消息"
+        是合并文本；幂等标记按 batch_key（首条 entry_id）建，成功后逐条打 mdone。"""
+        merged_message = self._batch_text(batch)
+        # 商品级默认回复门控：启用且文本非空时，仅对会话首条买家消息短路 AI 直接发固定文本。
+        # 合并语义下：整批的多条 user 消息都各自落库，再发一次默认回复。
         default_reply = await self._get_item_default_reply(item_id)
         if default_reply:
             conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
             if not await self._has_user_message(conv.id):
-                await self._add_message(conv.id, "user", send_message)
+                await self._persist_user_msgs(batch, conv.id, batch_key, ttl)
                 await self._add_message(conv.id, "assistant", default_reply)
                 logger.info(f"使用商品默认回复(首条) | chat_id={chat_id}, item_id={item_id}, reply={default_reply}")
                 await self.redis.setex(
@@ -525,14 +555,14 @@ class XianyuLive:
                     json.dumps({"chat_id": chat_id, "toid": send_user_id, "reply": default_reply}),
                 )
                 if not self.is_connected:
-                    logger.warning(f"WS 未连接，默认回复待重连后发送 | id={entry_id}")
+                    logger.warning(f"WS 未连接，默认回复待重连后发送 | ids={ids}")
                     return "retry"
                 try:
                     await self.send_msg(self.ws, chat_id, send_user_id, default_reply)
                 except Exception as e:
-                    logger.warning(f"默认回复发送失败，留 PEL | id={entry_id}: {e}")
+                    logger.warning(f"默认回复发送失败，留 PEL | ids={ids}: {e}")
                     return "retry"
-                await self.redis.setex(done_key, ttl, "1")
+                await self._mark_done(ids, ttl)
                 return "done"
 
         item_info = await self._get_item_cache(item_id)
@@ -555,21 +585,23 @@ class XianyuLive:
         item_desc = f"当前商品的信息如下：{self.build_item_description(item_info)}"
         item_custom_prompt = await self._get_item_custom_prompt(item_id)
 
-        # 留痕 user 消息 —— 仅一次。重投（上次 AI 失败、未 commit）时复用同一行，
-        # 并据其 id 重建"落库前"的上下文，保证重试与首次的 LLM 入参字节级一致。
-        usermsg_key = f"mq:usermsg:{entry_id}"
-        prior = await self.redis.get(usermsg_key)
+        # 留痕 user 消息 —— 整批仅一次。重投（上次 AI 失败、未 commit）时复用同一批行，
+        # 并据首行 id 重建"落库前"的上下文，保证重试与首次的 LLM 入参字节级一致。
+        umsg_key = f"mq:umsg:{batch_key}"
+        prior = await self.redis.get(umsg_key)
         if prior:
-            user_msg_id = int(prior)
-            context = await self._get_context_before(conv.id, user_msg_id)
+            first_msg_id = int(prior)
+            context = await self._get_context_before(conv.id, first_msg_id)
         else:
             context = await self._get_context(conv.id)
-            user_msg_id = await self._add_message(conv.id, "user", send_message)
-            await self.redis.setex(usermsg_key, ttl, str(user_msg_id))
-        logger.info(f"开始生成AI回复 | chat_id={chat_id}, 上下文条数={len(context)}, 商品额外提示词长度={len(item_custom_prompt)}")
+            first_msg_id = await self._persist_user_msgs(batch, conv.id, batch_key, ttl)
+        logger.info(
+            f"开始生成AI回复 | chat_id={chat_id}, 合并条数={len(batch)}, "
+            f"上下文条数={len(context)}, 商品额外提示词长度={len(item_custom_prompt)}"
+        )
         try:
             bot_reply, intent = await self.bot.generate_reply(
-                send_message, item_desc, context, item_custom_prompt=item_custom_prompt, chat_id=chat_id,
+                merged_message, item_desc, context, item_custom_prompt=item_custom_prompt, chat_id=chat_id,
             )
         except Exception as e:
             logger.error(f"AI生成回复异常，user 消息已留痕，留 PEL 重试 | chat_id={chat_id}, err={e}")
@@ -577,15 +609,14 @@ class XianyuLive:
 
         if bot_reply == "-":
             logger.info(f"AI返回'-'，不回复 | chat_id={chat_id}")
-            await self.redis.setex(done_key, ttl, "1")
+            await self._mark_done(ids, ttl)
             return "done"
 
-        # 提交：递增议价、落库 assistant、写 committed —— 这些副作用只发生一次。
+        # 提交：递增议价、落库 assistant、写 committed —— 这些副作用整批只发生一次。
         # 写 committed 之后即便发送失败，重投也只走"重发路径"，不再生成、不再落库、不再递增。
-        # 议价计数单独用 NX 标记守护：即便在 add_message/commit 之间发生 DB 失败导致整体重投，
-        # 也不会把同一条消息的议价轮次重复累加（会影响 PriceAgent 的 temperature）。
+        # 合并语义：一批多条买家消息只算一轮议价（+1），比逐条 +N 更贴合真实交互。
         if intent == "price":
-            if await self.redis.set(f"mq:incr:{entry_id}", "1", nx=True, ex=ttl):
+            if await self.redis.set(f"mq:bincr:{batch_key}", "1", nx=True, ex=ttl):
                 await self._increment_bargain(chat_id)
         await self._add_message(conv.id, "assistant", bot_reply, last_intent=intent)
         await self.redis.setex(
@@ -600,15 +631,27 @@ class XianyuLive:
             await asyncio.sleep(delay)
 
         if not self.is_connected:
-            logger.warning(f"WS 未连接，回复待重连后发送 | id={entry_id}")
+            logger.warning(f"WS 未连接，回复待重连后发送 | ids={ids}")
             return "retry"
         try:
             await self.send_msg(self.ws, chat_id, send_user_id, bot_reply)
         except Exception as e:
-            logger.warning(f"发送失败，留 PEL 重发 | id={entry_id}: {e}")
+            logger.warning(f"发送失败，留 PEL 重发 | ids={ids}: {e}")
             return "retry"
-        await self.redis.setex(done_key, ttl, "1")
+        await self._mark_done(ids, ttl)
         return "done"
+
+    async def _persist_user_msgs(self, batch, conv_id, batch_key, ttl) -> int:
+        """把批内每条买家消息各自落一行 user（保真历史），返回首行 id 并缓存于
+        mq:umsg:{batch_key}（供重投重建落库前上下文）。批大小=1 时与单条落库等价。"""
+        first_id = None
+        for _, f in batch:
+            mid = await self._add_message(conv_id, "user", f.get("send_message", ""))
+            if first_id is None:
+                first_id = mid
+        await self.redis.setex(f"mq:umsg:{batch_key}", ttl, str(first_id))
+        return first_id
+
 
     async def heartbeat_loop(self, ws):
         while True:

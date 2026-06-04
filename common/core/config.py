@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     MQ_READ_BLOCK_MS: int = 5000        # XREADGROUP 阻塞读超时（毫秒）
     MQ_DEDUP_TTL: int = 600             # 去重标记 replied:{id} 存活秒数（>= 消息时效即可）
     # 新鲜度上限复用 MESSAGE_EXPIRE_TIME（毫秒）：age 超过则放弃发送，不回复过期消息
+    # ── 去抖合并（短时间内同一买家连发多条 → 合并成一次 AI 回复）──────────
+    # 同一 chat_id 的消息先在内存里按滑动窗口缓冲：每来一条把该会话的 flush
+    # 推迟 WINDOW_MS；买家停顿超过窗口即合并 flush。MAX_MS 是从首条算起的硬上限，
+    # 防"一直打字永不回复"。设 WINDOW_MS=0 关闭合并（每条立即处理，与改动前逐条等价）。
+    MQ_DEBOUNCE_WINDOW_MS: int = 2000   # 滑动去抖窗口：买家停顿这么久就合并 flush
+    MQ_DEBOUNCE_MAX_MS: int = 10000     # 合并硬上限：从首条消息算起最多等这么久必 flush
 
     LOG_LEVEL: str = "INFO"
 

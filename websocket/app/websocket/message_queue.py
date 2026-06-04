@@ -8,9 +8,15 @@
 为什么放同进程：发送依赖活的 ws 连接（只存在于 websocket 进程），所以 consumer
 不能是独立容器。副作用反而是好事——重连期间发送失败不 XACK，重连后自动补发。
 
-并发与顺序：1 个 reader 阻塞读流，按 crc32(chat_id) % N 投到 N 个内存分片队列；
-N 个 worker 各自串行排干自己的分片。同一 chat_id 恒定落同一分片 → 每会话严格 FIFO；
-不同 chat_id 落不同分片 → 跨会话并发。
+并发与顺序：1 个 reader 阻塞读流，按 chat_id 进去抖缓冲（滑动窗口，见下），flush 后
+按 crc32(chat_id) % N 把整批投到 N 个内存分片队列；N 个 worker 各自串行排干自己的分片。
+同一 chat_id 恒定落同一分片 → 每会话严格 FIFO；不同 chat_id 落不同分片 → 跨会话并发。
+
+去抖合并：买家短时间连发多条时，reader 不立即处理，而是按 chat_id 缓冲——每来一条把该
+会话的 flush 推迟 MQ_DEBOUNCE_WINDOW_MS（滑动窗口），停顿超过窗口就把整批合并成一次
+AI 回复（首条算起最多压 MQ_DEBOUNCE_MAX_MS 硬上限）。合并后一批共享一次 AI 调用、一条
+assistant 回复、一次发送；幂等标记按 batch 主键（首条 entry_id）建，批内每个 entry_id
+都映射到该主键，保证任一成员被 reclaim 重投都能识别"整批已处理"。窗口设 0 关闭合并。
 """
 
 import asyncio
@@ -54,7 +60,7 @@ class MessageQueueConsumer:
     """流消费者：1 reader + N 分片 worker + 1 reclaimer。
 
     持有对 XianyuLive 实例的引用（而非 bot），这样 soft_reload 换 bot 后无需重建
-    consumer——process_job 每次都经 live.bot 取当前 bot。
+    consumer——process_job_batch 每次都经 live.bot 取当前 bot。
     """
 
     def __init__(self, live, redis):
@@ -64,20 +70,43 @@ class MessageQueueConsumer:
         self.consumer_name = f"c-{int(time.time())}"
         self.queues = [asyncio.Queue() for _ in range(self.n)]
         self._tasks: list[asyncio.Task] = []
-        # reader 把 entry_id 放进分片队列后登记于此；reclaimer 跳过仍在途的消息，杜绝重复发送
+        # reader/reclaimer 把 entry_id 收进缓冲或分片队列后登记于此；reclaimer 跳过仍在途的
+        # 消息（含正在去抖缓冲中的），杜绝重复发送。缓冲最多压 MQ_DEBOUNCE_MAX_MS（远小于
+        # reclaim 空闲阈值），故缓冲期不会被误判卡死。
         self._inflight: set[str] = set()
         self._stopped = False
+        # ── 去抖合并缓冲（按 chat_id）──
+        # _buffers[chat_id] = [(entry_id, fields), ...] 累积的待合并消息；
+        # _timers[chat_id]  = 该会话的 flush 定时器句柄（滑动窗口，每来一条重置）；
+        # _first_seen[chat_id] = 本批首条进入缓冲的时刻（loop 时钟），用于 MAX 硬上限。
+        self.window_ms = max(0, settings.MQ_DEBOUNCE_WINDOW_MS)
+        self.max_ms = max(self.window_ms, settings.MQ_DEBOUNCE_MAX_MS)
+        self._buffers: dict[str, list] = {}
+        self._timers: dict[str, asyncio.TimerHandle] = {}
+        self._first_seen: dict[str, float] = {}
+        self._loop = None
 
     async def start(self):
         await ensure_group(self.redis)
+        self._loop = asyncio.get_running_loop()
         self._tasks.append(asyncio.create_task(self._reader()))
         for i in range(self.n):
             self._tasks.append(asyncio.create_task(self._worker(i)))
         self._tasks.append(asyncio.create_task(self._reclaimer()))
-        logger.info(f"消息队列消费者已启动 | workers={self.n}, consumer={self.consumer_name}")
+        logger.info(
+            f"消息队列消费者已启动 | workers={self.n}, consumer={self.consumer_name}, "
+            f"debounce={self.window_ms}ms(max {self.max_ms}ms)"
+        )
 
     async def stop(self):
         self._stopped = True
+        # 取消所有待触发的去抖定时器：缓冲里未 flush 的消息不 XACK，留 PEL 由重启后的
+        # reader（新消费者）经 reclaimer 接管重投，不丢消息。
+        for t in self._timers.values():
+            t.cancel()
+        self._timers.clear()
+        self._buffers.clear()
+        self._first_seen.clear()
         for t in self._tasks:
             t.cancel()
         for t in self._tasks:
@@ -88,14 +117,45 @@ class MessageQueueConsumer:
         self._tasks.clear()
         logger.info("消息队列消费者已停止")
 
-    def _dispatch(self, entry_id: str, fields: dict):
-        """投到对应分片队列并登记在途。"""
+    def _admit(self, entry_id: str, fields: dict):
+        """收一条新消息：登记在途，并按 chat_id 进去抖缓冲（滑动窗口，受硬上限约束）。
+        window<=0 时不缓冲，立即作为单条 batch 派发（与改动前逐条处理等价）。"""
         self._inflight.add(entry_id)
-        idx = _shard(fields.get("chat_id", ""), self.n)
-        self.queues[idx].put_nowait((entry_id, fields))
+        if self.window_ms <= 0:
+            self._emit_batch([(entry_id, fields)])
+            return
+        chat_id = fields.get("chat_id", "")
+        self._buffers.setdefault(chat_id, []).append((entry_id, fields))
+        now = self._loop.time()
+        self._first_seen.setdefault(chat_id, now)
+        # 滑动窗口：每来一条把 flush 推迟 window_ms；但整体不超过从首条算起的硬上限 max_ms，
+        # 防"买家一直打字永不回复"。临近上限时 delay 收敛到 0，下一条即触发 flush。
+        remaining_to_max = self.max_ms / 1000.0 - (now - self._first_seen[chat_id])
+        delay = min(self.window_ms / 1000.0, max(0.0, remaining_to_max))
+        old = self._timers.get(chat_id)
+        if old:
+            old.cancel()
+        self._timers[chat_id] = self._loop.call_later(delay, self._flush, chat_id)
+
+    def _flush(self, chat_id: str):
+        """去抖定时器回调（sync）：把该会话缓冲的整批消息派发到其分片 worker。"""
+        self._timers.pop(chat_id, None)
+        self._first_seen.pop(chat_id, None)
+        batch = self._buffers.pop(chat_id, None)
+        if batch:
+            self._emit_batch(batch)
+
+    def _emit_batch(self, batch: list):
+        """把一批 (entry_id, fields) 投到 chat_id 所属分片队列；登记全部在途。
+        批内顺序 = 到达顺序（= stream id 升序）→ 会话内严格 FIFO。"""
+        for entry_id, _ in batch:
+            self._inflight.add(entry_id)
+        chat_id = batch[0][1].get("chat_id", "")
+        idx = _shard(chat_id, self.n)
+        self.queues[idx].put_nowait(batch)
 
     async def _reader(self):
-        """阻塞读新消息（'>'），只分发不处理，保证读循环不被 AI 阻塞。
+        """阻塞读新消息（'>'），只收进去抖缓冲不处理，保证读循环不被 AI 阻塞。
 
         本消费者用一次性名字（c-<ts>），不复用，故自身 PEL 恒空——无需历史回放。
         进程崩溃残留在旧消费者 PEL 中的消息由 reclaimer 通过 XCLAIM 接管重投，
@@ -117,7 +177,7 @@ class MessageQueueConsumer:
                     continue
                 for _stream, entries in resp:
                     for entry_id, fields in entries:
-                        self._dispatch(entry_id, fields)
+                        self._admit(entry_id, fields)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -125,42 +185,48 @@ class MessageQueueConsumer:
                 await asyncio.sleep(1)
 
     async def _worker(self, idx: int):
-        """串行排干分片队列。同 chat_id 恒落同一分片 → 会话内严格 FIFO。"""
+        """串行排干分片队列（每个元素是一整批合并消息）。
+        同 chat_id 恒落同一分片 → 会话内严格 FIFO。"""
         q = self.queues[idx]
         while not self._stopped:
             try:
-                entry_id, fields = await q.get()
+                batch = await q.get()
             except asyncio.CancelledError:
                 raise
+            ids = [eid for eid, _ in batch]
             try:
-                await self._handle(entry_id, fields)
+                await self._handle_batch(batch)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.exception(f"worker[{idx}] 处理异常（留 PEL 待重投）| id={entry_id}: {e}")
+                logger.exception(f"worker[{idx}] 批处理异常（留 PEL 待重投）| ids={ids}: {e}")
             finally:
-                self._inflight.discard(entry_id)
+                for entry_id in ids:
+                    self._inflight.discard(entry_id)
                 q.task_done()
 
-    async def _handle(self, entry_id: str, fields: dict):
-        """处理单条：调用 live.process_job；成功 / 不可重试 → XACK，可重试失败 → 留 PEL。
+    async def _handle_batch(self, batch: list):
+        """处理一整批：调用 live.process_job_batch；成功 / 不可重试 → 整批 XACK，
+        可重试失败 → 整批留 PEL（下次 reclaim 整批重投，幂等标记保证不重复 AI/落库/发送）。
 
         worker 内联快重试先兜瞬时抖动（网络抖动、偶发 429）；仍失败才落到 PEL 交
         reclaimer 做跨崩溃的耐久重试，避免每次小故障都等 reclaim 周期。
         """
+        ids = [eid for eid, _ in batch]
         attempts = settings.MQ_INLINE_RETRY + 1
         for n in range(attempts):
-            outcome = await self.live.process_job(entry_id, fields)
+            outcome = await self.live.process_job_batch(batch)
             if outcome != "retry":
-                # done / skip / expired / drop —— 均视为已终结，确认掉
-                await self._ack(entry_id)
+                # done / drop —— 均视为已终结，整批确认掉
+                for entry_id in ids:
+                    await self._ack(entry_id)
                 return
             if n < attempts - 1:
                 backoff = settings.MQ_INLINE_RETRY_BASE_MS * (2 ** n) / 1000.0
-                logger.warning(f"内联重试 {n + 1}/{attempts - 1}，{backoff:.1f}s 后 | id={entry_id}")
+                logger.warning(f"批内联重试 {n + 1}/{attempts - 1}，{backoff:.1f}s 后 | ids={ids}")
                 await asyncio.sleep(backoff)
-        # 内联重试耗尽：不 XACK，留在 PEL 等 reclaimer
-        logger.warning(f"内联重试耗尽，留 PEL 待 reclaim | id={entry_id}")
+        # 内联重试耗尽：不 XACK，整批留在 PEL 等 reclaimer
+        logger.warning(f"批内联重试耗尽，留 PEL 待 reclaim | ids={ids}")
 
     async def _ack(self, entry_id: str):
         try:
@@ -217,7 +283,9 @@ class MessageQueueConsumer:
                         await self._to_dead(entry_id, fields, "expired")
                         continue
                     logger.info(f"♻️ reclaim 重投 | id={entry_id}, deliv={p['times_delivered']}")
-                    self._dispatch(entry_id, fields)
+                    # 经去抖缓冲重投：同一失败批的成员会被先后 reclaim 并自然重新合并成批，
+                    # 与首次合并的成员集尽量一致；幂等标记保证不重复 AI/落库/发送。
+                    self._admit(entry_id, fields)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
