@@ -22,8 +22,12 @@ async def conversations_stream():
     EventSource 无法带 Authorization 头，故走 query-param token 鉴权（同运行时日志流）。"""
     url = f"{settings.WEBSOCKET_SERVICE_URL}/api/logs/conversations/stream"
 
+    # SSE 是永不结束的长流，aiohttp 默认 total=300s 会按时砍断（不看有无数据流动），
+    # 导致代理层每 5 分钟断一次。total=None 取消总超时，仅保留连接超时。
+    timeout = aiohttp.ClientTimeout(total=None, sock_connect=10)
+
     async def proxy_stream():
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
                 async for line in resp.content:
                     yield line
