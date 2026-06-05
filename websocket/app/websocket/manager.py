@@ -18,6 +18,7 @@ from ..services.xianyu.message_handler import (
 )
 from ..services.agent import XianyuReplyBot
 from .message_queue import enqueue
+from ..core import conv_events
 
 
 class XianyuLive:
@@ -106,6 +107,20 @@ class XianyuLive:
             )
             await db.commit()
             await db.refresh(msg)
+            # 实时增量推送：落库成功后把这条消息广播给 SSE 订阅者（前端对话页实时刷新）。
+            # 严格事后副作用——整段 try 包裹，推送失败绝不影响落库与主流程。
+            try:
+                conv_events.publish({
+                    "conversation_id": conversation_id,
+                    "message": {
+                        "id": msg.id,
+                        "role": role,
+                        "content": content,
+                        "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                    },
+                })
+            except Exception as e:
+                logger.debug(f"会话事件推送失败（不影响落库）| conv_id={conversation_id}: {e}")
             return msg.id
 
     async def _get_context(self, conversation_id: int, limit: int = 50) -> list:
@@ -332,6 +347,35 @@ class XianyuLive:
             ],
         }
         await ws.send(json.dumps(msg))
+
+    async def manual_send(self, chat_id: str, text: str) -> dict:
+        """从控制台人工发送一条消息给买家。
+
+        发送前强制切到人工接管（manual_mode），避免 AI 同时抢话；发送成功后落库
+        role='assistant'，与卖家在闲鱼 App 内手动回复的留痕方式一致（见 handle_message
+        中 send_user_id == self.myid 分支）。会话必须已存在（买家先发过），否则拿不到
+        买家 user_id（toid）。"""
+        text = (text or "").strip()
+        if not text:
+            return {"status": "error", "detail": "empty_text"}
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Conversation).where(Conversation.chat_id == chat_id))
+            conv = result.scalar_one_or_none()
+        if not conv:
+            return {"status": "error", "detail": "conversation_not_found"}
+        if not self.is_connected:
+            return {"status": "error", "detail": "ws_not_connected"}
+        # 强制开启人工接管（已开则续期），cid=chat_id、toid=买家 user_id
+        self.manual_mode_conversations.add(chat_id)
+        self.manual_mode_timestamps[chat_id] = time.time()
+        try:
+            await self.send_msg(self.ws, chat_id, conv.user_id, text)
+        except Exception as e:
+            logger.warning(f"人工发送失败 | chat_id={chat_id}: {e}")
+            return {"status": "error", "detail": "send_failed"}
+        await self._add_message(conv.id, "assistant", text)
+        logger.info(f"✉️ 人工发送 | chat_id={chat_id}, 内容: {text}")
+        return {"status": "ok", "chat_id": chat_id, "manual_mode": True}
 
     def build_item_description(self, item_info: dict) -> str:
         clean_skus = []

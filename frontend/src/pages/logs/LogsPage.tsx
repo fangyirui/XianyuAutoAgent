@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MessageSquare, Trash2 } from 'lucide-react'
-import { batchDeleteConversations, deleteConversation, getConversations, getMessages } from '@/api/logs'
+import { MessageSquare, Trash2, Send } from 'lucide-react'
+import { batchDeleteConversations, deleteConversation, getConversations, getMessages, sendMessage } from '@/api/logs'
 
 const PAGE_SIZE = 20
 
@@ -36,12 +36,26 @@ export default function LogsPage() {
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [deleting, setDeleting] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
   const countRef = useRef(0)
+  const bottomRef = useRef<HTMLDivElement | null>(null)
+  // SSE 长连里的回调闭包会捕获旧 state，故用 ref 持有"当前打开的会话"和"已加载会话 id 集合"
+  const selectedConvRef = useRef<Conversation | null>(null)
+  const convIdsRef = useRef<Set<number>>(new Set())
 
   useEffect(() => {
     countRef.current = conversations.length
   }, [conversations.length])
+
+  useEffect(() => {
+    selectedConvRef.current = selectedConv
+  }, [selectedConv])
+
+  useEffect(() => {
+    convIdsRef.current = new Set(conversations.map((c) => c.id))
+  }, [conversations])
 
   const hasMore = conversations.length < total
 
@@ -63,6 +77,20 @@ export default function LogsPage() {
     } finally {
       setLoading(false)
     }
+  }, [])
+
+  // 拉取第一页并与已加载列表合并去重，用于新会话（新买家首条消息）实时冒出来。
+  // 第一页按 updated_at 倒序，刚活跃的会话必在其中；合并后整体按 updated_at 重排。
+  const refreshFirstPage = useCallback(async () => {
+    const data = await getConversations(1, PAGE_SIZE)
+    setConversations((cur) => {
+      const byChat = new Map(cur.map((c) => [c.chat_id, c]))
+      for (const it of data.items as Conversation[]) byChat.set(it.chat_id, it)
+      return Array.from(byChat.values()).sort(
+        (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+      )
+    })
+    setTotal(data.total)
   }, [])
 
   const allLoadedSelected = useMemo(
@@ -138,6 +166,75 @@ export default function LogsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // 会话消息实时增量流（SSE）：新消息落库即推送，刷新当前对话框 + 会话列表
+  useEffect(() => {
+    let cancelled = false
+    let es: EventSource | null = null
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let retries = 0
+    const MAX_RETRIES = 5
+
+    const handleEvent = (ev: { conversation_id: number; message: Message }) => {
+      const { conversation_id, message } = ev
+      // 1) 命中当前打开的会话 → 按 id 去重追加到消息面板
+      if (selectedConvRef.current && selectedConvRef.current.id === conversation_id) {
+        setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]))
+      }
+      // 2) 列表里没有这个会话（新买家）→ 拉第一页带出来；有则就地更新预览+置顶
+      if (!convIdsRef.current.has(conversation_id)) {
+        refreshFirstPage().catch(() => {})
+        return
+      }
+      setConversations((prev) => {
+        const idx = prev.findIndex((c) => c.id === conversation_id)
+        if (idx === -1) return prev
+        const hit = {
+          ...prev[idx],
+          last_message: message.role === 'user' ? message.content : prev[idx].last_message,
+          message_count: prev[idx].message_count + 1,
+          updated_at: message.created_at,
+        }
+        const rest = prev.filter((_, i) => i !== idx)
+        return [hit, ...rest]
+      })
+    }
+
+    const openStream = () => {
+      if (cancelled) return
+      const token = localStorage.getItem('access_token') || ''
+      if (!token) return
+      es = new EventSource(`/api/logs/conversations/stream?token=${encodeURIComponent(token)}`)
+      es.onopen = () => { retries = 0 }
+      es.onmessage = (e) => {
+        try { handleEvent(JSON.parse(e.data)) } catch { /* ignore parse error */ }
+      }
+      es.onerror = async () => {
+        es?.close()
+        es = null
+        if (cancelled || retries >= MAX_RETRIES) return
+        retries += 1
+        // 触发一次 axios 调用，让 401 拦截器在需要时刷新 access token
+        try { await getConversations(1, 1) } catch { return }
+        if (cancelled) return
+        const backoff = Math.min(1000 * 2 ** (retries - 1), 15000)
+        retryTimer = setTimeout(openStream, backoff)
+      }
+    }
+
+    openStream()
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+      es?.close()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 当前对话框收到新消息时自动滚到底部
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
   // 滚动到底部哨兵元素时自动加载下一页
   useEffect(() => {
     const el = sentinelRef.current
@@ -157,7 +254,36 @@ export default function LogsPage() {
   const selectConversation = async (conv: Conversation) => {
     setSelectedChat(conv.chat_id)
     setSelectedConv(conv)
+    setDraft('')
     setMessages(await getMessages(conv.chat_id))
+  }
+
+  const ERR_MESSAGES: Record<string, string> = {
+    not_running: 'WebSocket 服务未运行',
+    ws_not_connected: '闲鱼连接已断开，无法发送',
+    conversation_not_found: '会话不存在',
+    empty_text: '消息内容不能为空',
+    send_failed: '发送失败，请重试',
+  }
+
+  const handleSend = async () => {
+    const text = draft.trim()
+    if (!text || !selectedChat || sending) return
+    setSending(true)
+    try {
+      const res = await sendMessage(selectedChat, text)
+      if (res.status !== 'ok') {
+        window.alert(ERR_MESSAGES[res.detail || ''] || `发送失败：${res.detail || '未知错误'}`)
+        return
+      }
+      setDraft('')
+      // 切到了人工接管，刷新消息列表带出刚发的这条
+      setMessages(await getMessages(selectedChat))
+    } catch {
+      window.alert('发送失败，请检查服务状态')
+    } finally {
+      setSending(false)
+    }
   }
 
   return (
@@ -314,7 +440,36 @@ export default function LogsPage() {
                   </div>
                 )
               })}
+              <div ref={bottomRef} />
             </div>
+            {selectedChat && (
+              <div className="border-t border-dark-700/60 p-3 shrink-0">
+                <div className="flex items-end gap-2">
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        handleSend()
+                      }
+                    }}
+                    rows={1}
+                    placeholder="输入消息，Enter 发送 / Shift+Enter 换行（发送后将切换为人工接管）"
+                    className="flex-1 resize-none max-h-32 px-3 py-2 rounded-xl bg-dark-800 border border-dark-700/60 text-sm text-gray-100 placeholder:text-dark-500 focus:outline-none focus:border-primary-500/50"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSend}
+                    disabled={!draft.trim() || sending}
+                    className="btn-primary !px-3 !py-2 flex items-center gap-1.5 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Send size={15} />
+                    {sending ? '发送中' : '发送'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

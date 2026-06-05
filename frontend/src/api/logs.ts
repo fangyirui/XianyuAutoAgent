@@ -58,3 +58,9 @@ export async function deleteConversation(chatId: string) {
 export async function batchDeleteConversations(chatIds: string[]) {
   await request.post('/logs/conversations/batch-delete', { chat_ids: chatIds })
 }
+
+// 从控制台人工发送消息给买家。后端会强制切到人工接管并落库 role=assistant。
+export async function sendMessage(chatId: string, text: string) {
+  const { data } = await request.post(`/ws/send-message/${chatId}`, { text })
+  return data as { status: string; detail?: string; chat_id?: string; manual_mode?: boolean }
+}

@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/control", tags=["control"])
 
@@ -8,6 +9,10 @@ _live_instance = None
 def set_live_instance(instance):
     global _live_instance
     _live_instance = instance
+
+
+class SendMessageBody(BaseModel):
+    text: str
 
 
 @router.post("/reconnect")
@@ -41,3 +46,10 @@ async def sync_items():
         return {"error": "not_running"}
     saved = await _live_instance.sync_my_items()
     return {"status": "ok", "saved": saved, "seller_id": str(_live_instance.myid)}
+
+
+@router.post("/send-message/{chat_id}")
+async def send_message(chat_id: str, body: SendMessageBody):
+    if not _live_instance:
+        return {"status": "error", "detail": "not_running"}
+    return await _live_instance.manual_send(chat_id, body.text)
