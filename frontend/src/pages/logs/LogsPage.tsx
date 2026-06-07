@@ -277,7 +277,7 @@ export default function LogsPage() {
         return
       }
       setDraft('')
-      // 切到了人工接管，刷新消息列表带出刚发的这条
+      // 刷新消息列表带出刚发的这条
       setMessages(await getMessages(selectedChat))
     } catch {
       window.alert('发送失败，请检查服务状态')
