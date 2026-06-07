@@ -17,6 +17,12 @@
 AI 回复（首条算起最多压 MQ_DEBOUNCE_MAX_MS 硬上限）。合并后一批共享一次 AI 调用、一条
 assistant 回复、一次发送；幂等标记按 batch 主键（首条 entry_id）建，批内每个 entry_id
 都映射到该主键，保证任一成员被 reclaim 重投都能识别"整批已处理"。窗口设 0 关闭合并。
+
+出队再合并（补足 reader 侧去抖够不到的场景）：reader 侧只按"到达间隔"合并，但买家也可能
+在上一条 AI 回复**生成期间**（慢调用，数十秒）才发下一条——此时 worker 正忙，后续消息已
+flush 进分片队列排队。worker 处理完一批后，**非阻塞排干此刻队列里已就绪的其余批**，按
+chat_id 分组合并再处理：同会话的多批并成一次 AI 调用，跨会话各自独立。不引入额外等待
+（只取已就绪的），无竞争时排干立即 Empty → 与逐批处理字节级一致；窗口设 0 时一并关闭。
 """
 
 import asyncio
@@ -186,24 +192,51 @@ class MessageQueueConsumer:
 
     async def _worker(self, idx: int):
         """串行排干分片队列（每个元素是一整批合并消息）。
-        同 chat_id 恒落同一分片 → 会话内严格 FIFO。"""
+        同 chat_id 恒落同一分片 → 会话内严格 FIFO。
+
+        出队再合并：worker 取到队首批后，**非阻塞排干此刻队列里已就绪的其余批**，按
+        chat_id 合并后再逐组处理。这补足了 reader 侧滑动去抖够不到的场景——worker 忙于
+        上一会话的慢 AI 调用时，同会话后续消息已 flush 进本队列等待，出队时一并取走、并成
+        一次 AI 调用。与到达间隔无关：只要"回复期间到达"就合并。
+
+        无竞争时（队列里仅一批）排干立即 Empty，分组只有一个 chat_id 的一批 → 与逐批处理
+        字节级一致；MQ_DEBOUNCE_WINDOW_MS=0（显式关闭合并）时跳过排干，退回纯逐批。"""
         q = self.queues[idx]
+        coalesce = self.window_ms > 0
         while not self._stopped:
             try:
-                batch = await q.get()
+                first = await q.get()
             except asyncio.CancelledError:
                 raise
-            ids = [eid for eid, _ in batch]
+            drained = [first]
+            if coalesce:
+                # 非阻塞排干当前队列：只取此刻已就绪的，不等待新到达（不引入额外延迟）。
+                while True:
+                    try:
+                        drained.append(q.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+            # 按 chat_id 分组（dict 保持首次出现顺序）；同 chat_id 多批按出队顺序(=到达顺序)拼接。
+            # 不同 chat_id 各自独立成组、独立处理，绝不跨会话合并。
+            groups: dict[str, list] = {}
+            for b in drained:
+                cid = b[0][1].get("chat_id", "")
+                groups.setdefault(cid, []).extend(b)
             try:
-                await self._handle_batch(batch)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.exception(f"worker[{idx}] 批处理异常（留 PEL 待重投）| ids={ids}: {e}")
+                for cid, merged in groups.items():
+                    ids = [eid for eid, _ in merged]
+                    try:
+                        await self._handle_batch(merged)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.exception(f"worker[{idx}] 批处理异常（留 PEL 待重投）| ids={ids}: {e}")
+                    finally:
+                        for entry_id in ids:
+                            self._inflight.discard(entry_id)
             finally:
-                for entry_id in ids:
-                    self._inflight.discard(entry_id)
-                q.task_done()
+                for _ in drained:
+                    q.task_done()
 
     async def _handle_batch(self, batch: list):
         """处理一整批：调用 live.process_job_batch；成功 / 不可重试 → 整批 XACK，
