@@ -309,11 +309,14 @@ export default function ItemsPage() {
                             <textarea
                               value={replyDraft}
                               onChange={(e) => setReplyDraft(e.target.value)}
-                              maxLength={500}
+                              maxLength={2000}
                               rows={3}
                               className="input !p-2.5 text-xs"
-                              placeholder="启用后，仅对每个会话的第一条买家消息回复这段固定文本，之后交给 AI"
+                              placeholder="启用后，仅对每个会话的第一条买家消息回复这段固定文本，之后交给 AI。插入 {$分隔符} 可把内容拆成多条消息分别发送。"
                             />
+                            <div className="text-[10px] text-dark-500 leading-relaxed">
+                              提示：在文本中插入 <code className="px-1 py-0.5 rounded bg-dark-700 text-primary-300">{'{$分隔符}'}</code> 占位符，发送时会按它把内容切割成多条消息依次发给买家。
+                            </div>
                             <div className="flex gap-2 items-center">
                               <button onClick={() => saveReply(item)} disabled={savingReply} className="btn btn-primary btn-sm">
                                 {savingReply ? '保存中…' : '保存'}
@@ -321,7 +324,7 @@ export default function ItemsPage() {
                               <button onClick={cancelEditReply} disabled={savingReply} className="btn btn-secondary btn-sm">
                                 取消
                               </button>
-                              <span className="text-dark-500 ml-auto">{replyDraft.length}/500</span>
+                              <span className="text-dark-500 ml-auto">{replyDraft.length}/2000</span>
                             </div>
                             {replyErr && <div className="text-red-400 text-xs">{replyErr}</div>}
                           </div>

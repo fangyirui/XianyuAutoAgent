@@ -21,6 +21,11 @@ from .message_queue import enqueue
 from ..core import conv_events
 
 
+# 商品默认回复内的分隔符占位符：写死，不走配置。发送时按它切割成多条消息逐条发出。
+# 文本中不含该占位符时，发送逻辑退化为单条原文发送（与改动前字节级一致）。
+REPLY_SPLIT_DELIMITER = "{$分隔符}"
+
+
 class XianyuLive:
     def __init__(self):
         cookies_str = settings.COOKIES_STR
@@ -348,7 +353,23 @@ class XianyuLive:
         }
         await ws.send(json.dumps(msg))
 
-    async def manual_send(self, chat_id: str, text: str) -> dict:
+    @staticmethod
+    def _split_reply(text: str) -> list:
+        """按写死的分隔符占位符把回复切成多段，去掉空白段。
+        不含占位符时返回 [text] —— 上层据此退化为单条发送，字节级与改动前一致。"""
+        if REPLY_SPLIT_DELIMITER not in text:
+            return [text]
+        return [seg.strip() for seg in text.split(REPLY_SPLIT_DELIMITER) if seg.strip()]
+
+    async def send_msg_multi(self, ws, cid: str, toid: str, text: str):
+        """发送回复：若文本含分隔符占位符则切成多条按序逐条发出，否则单条发送。
+        多条之间留少量随机停顿，更接近真人连发。"""
+        segments = self._split_reply(text)
+        for i, seg in enumerate(segments):
+            if i > 0:
+                await asyncio.sleep(random.uniform(0.5, 1.2))
+            await self.send_msg(ws, cid, toid, seg)
+
         """从控制台人工发送一条消息给买家。
 
         行为与卖家在闲鱼 App 内手动回复完全一致：仅发送 + 落库 role='assistant'
@@ -558,7 +579,7 @@ class XianyuLive:
                     logger.warning(f"重发但 WS 未连接，待重连后重试 | ids={ids}")
                     return "retry"
                 try:
-                    await self.send_msg(self.ws, data["chat_id"], data["toid"], data["reply"])
+                    await self.send_msg_multi(self.ws, data["chat_id"], data["toid"], data["reply"])
                 except Exception as e:
                     logger.warning(f"批重发失败，留 PEL | ids={ids}: {e}")
                     return "retry"
@@ -599,7 +620,7 @@ class XianyuLive:
                     logger.warning(f"WS 未连接，默认回复待重连后发送 | ids={ids}")
                     return "retry"
                 try:
-                    await self.send_msg(self.ws, chat_id, send_user_id, default_reply)
+                    await self.send_msg_multi(self.ws, chat_id, send_user_id, default_reply)
                 except Exception as e:
                     logger.warning(f"默认回复发送失败，留 PEL | ids={ids}: {e}")
                     return "retry"
