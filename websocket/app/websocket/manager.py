@@ -370,6 +370,7 @@ class XianyuLive:
                 await asyncio.sleep(random.uniform(0.5, 1.2))
             await self.send_msg(ws, cid, toid, seg)
 
+    async def manual_send(self, chat_id: str, text: str) -> dict:
         """从控制台人工发送一条消息给买家。
 
         行为与卖家在闲鱼 App 内手动回复完全一致：仅发送 + 落库 role='assistant'
