@@ -41,20 +41,30 @@ export default function SettingsPage() {
 
   const handleSaveCookie = async () => {
     setSaving(true)
-    await updateEnvConfig({ COOKIES_STR: cookieInput })
-    showMsg('Cookie 已保存，服务正在重载')
-    const fresh = await getEnvConfig()
-    setEnv(fresh); setCookieInput(fresh.COOKIES_STR)
-    setSaving(false)
+    try {
+      await updateEnvConfig({ COOKIES_STR: cookieInput })
+      showMsg('Cookie 已保存，服务正在重载')
+      const fresh = await getEnvConfig()
+      setEnv(fresh); setCookieInput(fresh.COOKIES_STR)
+    } catch (e: any) {
+      showMsg(e?.response?.data?.detail || '保存失败', 'error')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleSaveAi = async () => {
     setSaving(true)
-    await updateEnvConfig({ API_KEY: env.API_KEY, MODEL_BASE_URL: env.MODEL_BASE_URL, MODEL_NAME: env.MODEL_NAME })
-    showMsg('AI 配置已保存，服务正在重载')
-    const fresh = await getEnvConfig()
-    setEnv(fresh)
-    setSaving(false)
+    try {
+      await updateEnvConfig({ API_KEY: env.API_KEY, MODEL_BASE_URL: env.MODEL_BASE_URL, MODEL_NAME: env.MODEL_NAME })
+      showMsg('AI 配置已保存，服务正在重载')
+      const fresh = await getEnvConfig()
+      setEnv(fresh)
+    } catch (e: any) {
+      showMsg(e?.response?.data?.detail || '保存失败', 'error')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleTestAi = async () => {
@@ -68,19 +78,29 @@ export default function SettingsPage() {
   const handleSavePrompt = async () => {
     if (!selectedPrompt) return
     setSaving(true)
-    await updatePrompt(selectedPrompt.name, promptEditing)
-    setPrompts((prev) => prev.map((p) => (p.name === selectedPrompt.name ? { ...p, content: promptEditing } : p)))
-    showMsg('提示词已保存')
-    setSaving(false)
+    try {
+      await updatePrompt(selectedPrompt.name, promptEditing)
+      setPrompts((prev) => prev.map((p) => (p.name === selectedPrompt.name ? { ...p, content: promptEditing } : p)))
+      showMsg('提示词已保存')
+    } catch (e: any) {
+      showMsg(e?.response?.data?.detail || '保存失败', 'error')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleSaveFilter = async () => {
     setSaving(true)
-    await updateEnvConfig({ SKIP_KEYWORDS: env.SKIP_KEYWORDS })
-    showMsg('过滤词已保存，服务正在重载')
-    const fresh = await getEnvConfig()
-    setEnv(fresh)
-    setSaving(false)
+    try {
+      await updateEnvConfig({ SKIP_KEYWORDS: env.SKIP_KEYWORDS })
+      showMsg('过滤词已保存，服务正在重载')
+      const fresh = await getEnvConfig()
+      setEnv(fresh)
+    } catch (e: any) {
+      showMsg(e?.response?.data?.detail || '保存失败', 'error')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const tabs: { key: Tab; label: string; icon: typeof Cookie }[] = [
