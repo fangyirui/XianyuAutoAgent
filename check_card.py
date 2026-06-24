@@ -1,304 +1,99 @@
 #!/usr/bin/env python3
-"""调用 1688ai 卡密查询接口，若 card_code_obj 有值则打印卡密。"""
+"""调用 1688ai 卡密查询接口，若 card_code_obj 有值则打印卡密。
+
+接口被 Cloudflare Managed Challenge 保护，需用浏览器过一次人机验证后，
+把 cf_clearance cookie 和当时的 User-Agent 填到下面两个常量里。
+注意：cf_clearance 绑定 IP + User-Agent + TLS 指纹，所以
+1) 必须用与抓 cookie 时同一台机器（同出口 IP）跑脚本；
+2) USER_AGENT 必须与你浏览器完全一致；
+3) cookie 会过期（几十分钟到几小时），失效后重新抓一次即可。
+
+依赖：pip install curl_cffi  （用它模拟 Chrome 的 TLS/JA3 指纹）
+"""
 import sys
-import ssl
 import json
-import urllib.request
 
-API_BASE = "https://1688ai.vip/tasks/card"
+from curl_cffi import requests as cffi_requests
 
-# 排除的卡密（一行一个，格式同 CARD_CODES）
-EXCLUDE_CODES_RAW = """
-7379M9G0AR7LSX9Z
-ZUZX3D1IT98PIWRD
-W1E3DUEOI2V9C4UT
-9WUV57NHVCE5LVHM
-K19MEVCL6ZPUNPHP
-YKIH0AH3AY8ZM6OG
-1JPKI5C83EAKVBZ5
-KIM3WXNY4V83EXQD
-FYCZVMQUUI1NLP29
-3X9CU11YODGSOP0J
-3UMYH5GE3C1H1WG1
-E2RT013JRYY5FJZB
-NLLXHDF99GUAZ194
-Y9R18E5WCCSUDM36
-DG62Y2SFHURLXUAA
-1MC7L0HATPNGSRCA
-CRO73X98228NBIGQ
-F4B6HPZDH1KV8R3C
-BUR7GC9VD119TPFF
-MSHRZ6JB74EDPVV2
-LRYT95K7MW906MD7
-L3XV9FT00I9KELIL
-DJ3P22WIUDF93EVY
-PL67K2XBGIZTVKUY
-22SPAIDHVWG7FZIR
-WS3OAFXQQWLJ6HLA
-ISR96341DWQJF6K0
-DREJGJZ01S3ZO0I7
-Y94JXZZNA3WRPPV8
-V5D0EP4NGKWPSIS4
-RQZRIG914S8F8YAC
-4NJXGGVG2T4LOJ8O
-QDO585LTO6W5X8PY
-6FG1RHTZEGR1YLHZ
-GFLF8GPP46GDLTGC
-ELIYKIEUMG3SNRGE
-A1UBCNKW34RS0HFT
-FD58YQ7DH5J0OKED
-0HL497XUBJLZ5PZJ
-TV41PONC7C72C3I7
-ZN28WMBLXYAH63DZ
-MQRZ7BEMDRQJ9QHM
-LACMGIHTEXVCJTB7
-F5YS9EBRIJTABQWS
-971MEWHIXKYP1OUC
-DNDJHLUWEG3OSUYU
-YKXWI7MR6JZC01K0
-0YT7VRC8QTRGNMRS
-AS9MMBKCNHAXD0HO
-68RSNKS2495MK3LY
-FY0SZPX333DHP610
-3OMYPQ3Y1C3KT148
-WQ0T0DIREU5TMV47
-9M4UVV24LSN8EPLS
-7KFPUWUNP3EQNYXP
-VDKO3JIYLWPA77R4
-VVRCW4214NW88M0U
-VV851MO5S5W40G2R
-76WXB5YX5IY8WO6N
-R6KU5WPU843COOU9
-76YG9D4U0G8MB0EP
-LDNJXGHY2DRVJK32
-EVM5TXOG92LFVAGJ
-IT4Y77LCO5NIBXN9
-SORBJBDR2PIU9PEN
-TY3YW1HI5F7YRQ2L
-46L9J3RXK8JCOSB4
-HH47LWO7MIH74FLS
-CMWQV7JHL2X8ARTT
-95EIDPYCE763MDSE
-4FKZRTTYJM04ZNS4
-TW8L72P34OKX39UC
-I435ZX417DC6RR7D
-VQQZG7BPDG2NS4OW
-NUIOW3028D381WH2
-PDSF381Q9062VA74
-5XK41TXIL5SVQSIQ
-5T93ZJOK35PN65AD
-BDTGFGYP9TARZP35
-JRUC0QZ2EBDGSYN2
-R3CFYPBUOQXWZG1J
-LFI38AXBCSU85RWL
-VIW13UH4819QZ222
-270AG09XKGGBZ6MX
-VTXWNXMS81JH1L0T
-5RV1N8RC8O1NQB63
-J5XF9XYZZWWZ4KGB
-PF4QG64A2QG84A13
-LKO8WQ9IOSDDWFAG
-PCVKLJO697K9U9FA
-QK1E72G2XGGCADRZ
-W9FQFDAK6L6F7BN1
-AZCJH7U9FHJZ15S1
-UF7NJ8BKNIREW2DE
-TGM0UKIK1OFZ5WOS
-GZ1UH82KSMFUQDJ8
-0VDEKEMAVS0INATS
-WRCXQ6S2AHZU1E6C
-RW7JUMFNYX3Z45QJ
-Q38RJFVSOXVFMAR2
-3A668WDG9OBUZXKJ
-A368UIJE44FVXWCX
-Z0SGF185G2RP81HK
-9XH90JMKVCT7ZKDW
-RCUNR7AZBLLYFHZC
-MDBVBU0TY2YUHOSR
-AOB1Z5TTQLFTW0BE
-ED15MUQPDMCNDLB2
-UD9BSQD9QPLDQ3VQ
-SKS6Z92FSXWWZ8XF
-A3DN3DEHE0W04RR3
-O9KOB5JAE5K727Q5
-FGE2I25EGGA6Y8IS
-WDMJUNZ95I4OANNL
-U14QQUHGN702C8NP
-6MSV8H9CDNGL0OTO
-CZAR6K9W7SHYOFMH
-H6RN9K68AZW9FV4L
-N6S8TL9FOP21CN65
-6UA1IUSXPZRT264V
-1TA3CQ9KAB4QB5WE
-7MWNMSFAD7C4YRBC
-YN3LHE2MUIQICZSD
-UMJSEHXHIHIXSFGK
-"""
+API_BASE = "https://86ai.one/tasks/card"
 
-# 在这里填卡密，一行一个（空行和 # 开头的行会被忽略）
-CARD_CODES = """
-7379M9G0AR7LSX9Z
-ZUZX3D1IT98PIWRD
-W1E3DUEOI2V9C4UT
-9WUV57NHVCE5LVHM
-K19MEVCL6ZPUNPHP
-YKIH0AH3AY8ZM6OG
-1JPKI5C83EAKVBZ5
-KIM3WXNY4V83EXQD
-FYCZVMQUUI1NLP29
-3X9CU11YODGSOP0J
-3UMYH5GE3C1H1WG1
-E2RT013JRYY5FJZB
-NLLXHDF99GUAZ194
-Y9R18E5WCCSUDM36
-DG62Y2SFHURLXUAA
-1MC7L0HATPNGSRCA
-CRO73X98228NBIGQ
-F4B6HPZDH1KV8R3C
-BUR7GC9VD119TPFF
-MSHRZ6JB74EDPVV2
-LRYT95K7MW906MD7
-L3XV9FT00I9KELIL
-DJ3P22WIUDF93EVY
-PL67K2XBGIZTVKUY
-22SPAIDHVWG7FZIR
-WS3OAFXQQWLJ6HLA
-ISR96341DWQJF6K0
-DREJGJZ01S3ZO0I7
-Y94JXZZNA3WRPPV8
-V5D0EP4NGKWPSIS4
-RQZRIG914S8F8YAC
-4NJXGGVG2T4LOJ8O
-QDO585LTO6W5X8PY
-6FG1RHTZEGR1YLHZ
-GFLF8GPP46GDLTGC
-ELIYKIEUMG3SNRGE
-A1UBCNKW34RS0HFT
-FD58YQ7DH5J0OKED
-0HL497XUBJLZ5PZJ
-TV41PONC7C72C3I7
-ZN28WMBLXYAH63DZ
-MQRZ7BEMDRQJ9QHM
-LACMGIHTEXVCJTB7
-F5YS9EBRIJTABQWS
-971MEWHIXKYP1OUC
-DNDJHLUWEG3OSUYU
-YKXWI7MR6JZC01K0
-0YT7VRC8QTRGNMRS
-AS9MMBKCNHAXD0HO
-68RSNKS2495MK3LY
-FY0SZPX333DHP610
-3OMYPQ3Y1C3KT148
-WQ0T0DIREU5TMV47
-9M4UVV24LSN8EPLS
-7KFPUWUNP3EQNYXP
-VDKO3JIYLWPA77R4
-VVRCW4214NW88M0U
-VV851MO5S5W40G2R
-76WXB5YX5IY8WO6N
-R6KU5WPU843COOU9
-76YG9D4U0G8MB0EP
-LDNJXGHY2DRVJK32
-EVM5TXOG92LFVAGJ
-IT4Y77LCO5NIBXN9
-SORBJBDR2PIU9PEN
-TY3YW1HI5F7YRQ2L
-46L9J3RXK8JCOSB4
-HH47LWO7MIH74FLS
-CMWQV7JHL2X8ARTT
-95EIDPYCE763MDSE
-4FKZRTTYJM04ZNS4
-TW8L72P34OKX39UC
-I435ZX417DC6RR7D
-VQQZG7BPDG2NS4OW
-NUIOW3028D381WH2
-PDSF381Q9062VA74
-5XK41TXIL5SVQSIQ
-5T93ZJOK35PN65AD
-BDTGFGYP9TARZP35
-JRUC0QZ2EBDGSYN2
-R3CFYPBUOQXWZG1J
-LFI38AXBCSU85RWL
-VIW13UH4819QZ222
-270AG09XKGGBZ6MX
-VTXWNXMS81JH1L0T
-5RV1N8RC8O1NQB63
-J5XF9XYZZWWZ4KGB
-PF4QG64A2QG84A13
-LKO8WQ9IOSDDWFAG
-PCVKLJO697K9U9FA
-QK1E72G2XGGCADRZ
-W9FQFDAK6L6F7BN1
-AZCJH7U9FHJZ15S1
-UF7NJ8BKNIREW2DE
-TGM0UKIK1OFZ5WOS
-GZ1UH82KSMFUQDJ8
-0VDEKEMAVS0INATS
-WRCXQ6S2AHZU1E6C
-RW7JUMFNYX3Z45QJ
-Q38RJFVSOXVFMAR2
-3A668WDG9OBUZXKJ
-A368UIJE44FVXWCX
-Z0SGF185G2RP81HK
-9XH90JMKVCT7ZKDW
-RCUNR7AZBLLYFHZC
-MDBVBU0TY2YUHOSR
-AOB1Z5TTQLFTW0BE
-ED15MUQPDMCNDLB2
-UD9BSQD9QPLDQ3VQ
-SKS6Z92FSXWWZ8XF
-A3DN3DEHE0W04RR3
-O9KOB5JAE5K727Q5
-FGE2I25EGGA6Y8IS
-WDMJUNZ95I4OANNL
-U14QQUHGN702C8NP
-6MSV8H9CDNGL0OTO
-CZAR6K9W7SHYOFMH
-H6RN9K68AZW9FV4L
-N6S8TL9FOP21CN65
-6UA1IUSXPZRT264V
-1TA3CQ9KAB4QB5WE
-7MWNMSFAD7C4YRBC
-YN3LHE2MUIQICZSD
-UMJSEHXHIHIXSFGK
-xxxx
-"""
+# ↓↓↓ 在浏览器 F12 → Application/Network 里复制这两个值 ↓↓↓
+CF_CLEARANCE = "cf_clearance=AZF08s8qKlZob90AB8H_MVVpzUG2cwNXGObQGiFeMkg-1782120205-1.2.1.1-NDzhzux0jfMPka1oGHSKAWocR8pykcJ4at0GVsGVlRq_9oWtqBiExUCgpjrWAHOJl.wyMgoGdWA6ew3qSZn9FFlOGNounrk0CTxmvbr_Y4f_Y.aBIJ5bOobwU88GL2wkItHSzS1x5CufAXEqRZS_4u1IzTOSahmDHqNsW_LA8fabOqKu4ztE_cJ4d4yzG17AUp2P8IttYuCkjlPp8.CSUE70i0HXVuuOsvou5XcK7m1urftCq9tA_Nt.5m3JW698R5dplbCltk3AXl2oWLH23qKNtNmrfTLc4pOJok.483ZK6QTpjhfsrcywLYvQ44TMkfelisUfp1ucs.W71mRUdFxqLKnToRLK4gic.72P5sxzsFVN0zMylFS5oxnVU00PT61_9BKr0tIILHxF9y0Qnt3X7iYZUFME4XM9DMomXdshtTMY2b.sicO4QVg9D_pJ"
+
+# 必须与抓 cookie 时浏览器的 UA 完全一致，否则 cf_clearance 失效
+USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36")
+
+# curl_cffi 模拟的浏览器指纹，尽量与 USER_AGENT 的 Chrome 大版本对齐
+IMPERSONATE = "chrome120"
+# ↑↑↑ 配置区结束 ↑↑↑
+
+# 排除的卡密文件（一行一个，空行和 # 注释会被忽略）
+EXCLUDE_CODES_FILE = "exclued_codes.txt"
+
+# 卡密来源文件：TSV 格式，首行表头，第一列为卡号（制表符分隔）。
+# 命令行传参优先；否则从此文件读取。
+CARD_CODES_FILE = "gemini pro订阅_20260622164559.txt"
 
 
-def _build_ssl_context() -> ssl.SSLContext:
-    """优先用 certifi 证书；缺失（如 python.org 版未装系统 CA）则回退到不校验。"""
-    try:
-        import certifi
-        return ssl.create_default_context(cafile=certifi.where())
-    except Exception:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        return ctx
+def _emit(card_code: str, status: str, reason: str = "") -> None:
+    """统一输出：卡密 状态 原因。"""
+    print(f"{card_code}\t{status}\t{reason}")
 
 
-def check_card(card_code: str, page: int = 1, page_size: int = 20) -> int:
+# 卡号 → 出库时间（从 TSV 文件读入；命令行直接传卡号时为空）
+OUTBOUND_TIME: dict[str, str] = {}
+
+
+def check_card(card_code: str, page: int = 1, page_size: int = 20) -> None:
     url = f"{API_BASE}/{card_code}?page={page}&page_size={page_size}"
-    req = urllib.request.Request(url, headers={
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/120.0 Safari/537.36",
-    })
-    with urllib.request.urlopen(req, timeout=15, context=_build_ssl_context()) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    resp = cffi_requests.get(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        },
+        cookies={"cf_clearance": CF_CLEARANCE},
+        impersonate=IMPERSONATE,
+        timeout=15,
+    )
+
+    # Cloudflare 拦截时返回 403 + HTML 质询页
+    if resp.status_code != 200:
+        if "Just a moment" in resp.text or resp.status_code == 403:
+            _emit(card_code, "错误", "Cloudflare拦截(cf_clearance过期或UA/IP不匹配)")
+        else:
+            _emit(card_code, "错误", f"HTTP {resp.status_code}")
+        return
+
+    payload = resp.json()
 
     if not payload.get("success"):
-        print(f"[{card_code}] 接口返回失败: {payload}")
+        _emit(card_code, "错误", f"接口返回失败: {payload}")
         return
 
     card_code_obj = payload.get("data", {}).get("card_code_obj")
 
-    # card_code_obj 有值（非空 dict）即认为卡密有效
-    if card_code_obj:
-        print(f"卡密: {card_code}  详情: {json.dumps(card_code_obj, ensure_ascii=False)}")
+    # card_code_obj 为空 dict / None → 暂无卡密
+    if not card_code_obj:
+        _emit(card_code, "无卡密", "card_code_obj为空")
+        return
+
+    # 有值：按额度判断已用完 / 可用
+    total = card_code_obj.get("total_quota")
+    used = card_code_obj.get("used_quota")
+    if isinstance(total, int) and isinstance(used, int):
+        if used >= total:
+            _emit(card_code, "已用完", f"已用 {used}/{total}")
+        else:
+            # 可用：在原因后附出库时间（若文件里有）
+            reason = f"已用 {used}/{total}"
+            outbound = OUTBOUND_TIME.get(card_code)
+            if outbound:
+                reason += f"  出库时间 {outbound}"
+            _emit(card_code, "可用", reason)
     else:
-        print(f"[{card_code}] card_code_obj 为空，暂无卡密")
+        # 缺额度字段时原样附详情，避免误判
+        _emit(card_code, "可用", json.dumps(card_code_obj, ensure_ascii=False))
 
 
 def parse_codes(raw: str) -> list[str]:
@@ -312,22 +107,61 @@ def parse_codes(raw: str) -> list[str]:
     return codes
 
 
+def read_codes_from_file(path: str) -> list[str]:
+    """从 TSV 文件读卡号：跳过表头，取每行第一列（制表符分隔）。
+
+    顺带把第 7 列“出库时间”填入全局 OUTBOUND_TIME 映射。
+    """
+    codes = []
+    # utf-8-sig 自动吃掉文件开头的 BOM
+    with open(path, encoding="utf-8-sig") as f:
+        for i, line in enumerate(f):
+            line = line.rstrip("\r\n")
+            if not line.strip():
+                continue
+            cols = line.split("\t")
+            code = cols[0].strip()
+            # 跳过表头行（第一列是“卡号”二字而非真正的卡号）
+            if i == 0 and code == "卡号":
+                continue
+            if not code or code.startswith("#"):
+                continue
+            codes.append(code)
+            # 第 7 列（索引 6）为出库时间，存在则记录
+            if len(cols) > 6 and cols[6].strip():
+                OUTBOUND_TIME[code] = cols[6].strip()
+    return codes
+
+
 if __name__ == "__main__":
-    # 命令行传参优先，否则用脚本顶部的 CARD_CODES
-    codes = sys.argv[1:] if len(sys.argv) > 1 else parse_codes(CARD_CODES)
+    # 命令行传参优先，否则从 CARD_CODES_FILE 读取
+    if len(sys.argv) > 1:
+        codes = sys.argv[1:]
+    else:
+        try:
+            codes = read_codes_from_file(CARD_CODES_FILE)
+        except FileNotFoundError:
+            print(f"找不到卡密文件：{CARD_CODES_FILE}")
+            sys.exit(1)
     if not codes:
-        print("没有可查询的卡密，请在脚本顶部 CARD_CODES 中填入，一行一个。")
+        print(f"没有可查询的卡密，请检查文件 {CARD_CODES_FILE} 或命令行参数。")
         sys.exit(1)
 
-    # 过滤掉排除列表中的卡密
-    exclude_set = set(parse_codes(EXCLUDE_CODES_RAW))
+    # 过滤掉排除列表中的卡密（排除文件可选，不存在则视为空）
+    try:
+        with open(EXCLUDE_CODES_FILE, encoding="utf-8-sig") as f:
+            exclude_set = set(parse_codes(f.read()))
+    except FileNotFoundError:
+        exclude_set = set()
     codes = [c for c in codes if c not in exclude_set]
     if not codes:
         print("所有卡密都在排除列表中，无需查询。")
         sys.exit(0)
 
+    # 表头
+    _emit("卡密", "状态", "原因")
     for code in codes:
         try:
             check_card(code)
         except Exception as e:
-            print(f"[{code}] 查询出错: {e}")
+            _emit(code, "错误", str(e))
