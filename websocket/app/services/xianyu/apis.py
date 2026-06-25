@@ -14,6 +14,10 @@ class XianyuApis:
         self.cookies_str = cookies_str
         self.cookies = self._parse_cookies(cookies_str)
         self.risk_control_until: float = 0.0
+        # 串行化所有 mtop 请求的"读 _m_h5_tk → 签名 → 请求 → 接 Set-Cookie 续期"原子段。
+        # _m_h5_tk 是"首次失败续期、二次成功"的两步握手 token，token_refresh_loop 与多个
+        # 消息 worker 会并发打 mtop，不串行就会互相覆盖刚续期的 token，导致签名永远对不上。
+        self._mtop_lock = asyncio.Lock()
         self._headers = {
             "accept": "application/json",
             "origin": "https://www.goofish.com",
@@ -46,55 +50,87 @@ class XianyuApis:
     def _cookie_header(self) -> str:
         return self.cookie_str
 
+    async def _signed_post(self, api: str, data_val: str, extra_params: dict | None = None) -> dict | None:
+        """执行一次签名 mtop 请求并接住 Set-Cookie 续期，整段在锁内原子完成。
+
+        读 _m_h5_tk → 算签名 → 发请求 → 把 resp 的 Set-Cookie 写回 self.cookies，
+        这四步必须对并发调用方互斥：否则 A 刚拿到续期 token、B 又用旧 token 覆盖，
+        握手永远完不成（持续 FAIL_SYS_TOKEN_EXPIRED）。返回解析后的 dict，非 dict 返回 None。"""
+        async with self._mtop_lock:
+            t = str(int(time.time()) * 1000)
+            token = self.cookies.get("_m_h5_tk", "").split("_")[0]
+            sign = generate_sign(t, token, data_val)
+            params = {
+                "jsv": "2.7.2", "appKey": "34839810", "t": t, "sign": sign,
+                "v": "1.0", "type": "originaljson", "accountSite": "xianyu",
+                "dataType": "json", "timeout": "20000",
+                "api": api,
+                "sessionOption": "AutoLoginOnly",
+            }
+            if extra_params:
+                params.update(extra_params)
+            url = f"https://h5api.m.goofish.com/h5/{api}/1.0/"
+            async with aiohttp.ClientSession(headers=self._headers, cookies=self.cookies) as session:
+                async with session.post(url, params=params, data={"data": data_val}) as resp:
+                    res = await resp.json()
+                    for cookie in resp.cookies.values():
+                        self.cookies[cookie.key] = cookie.value
+        return res if isinstance(res, dict) else None
+
+    @staticmethod
+    def _is_token_expired(ret_value) -> bool:
+        msg = str(ret_value)
+        # 注意：服务端实际返回的是拼写错误的 FAIL_SYS_TOKEN_EXOIRED，一并匹配
+        return "TOKEN_EXPIRED" in msg or "TOKEN_EXOIRED" in msg or "令牌过期" in msg
+
+    def _expire_local_token(self):
+        """主动作废本地 _m_h5_tk，逼下一次请求走干净的两步握手，
+        而不是拿可能已脏的旧 token 反复签名。"""
+        self.cookies.pop("_m_h5_tk", None)
+
     async def get_token(self, device_id: str, retry_count: int = 0) -> dict | None:
+        """获取登录 token。有限重试（不再递归）：最多 MAX_ATTEMPTS 次请求，
+        其间允许一次 has_login 复核重置；耗尽即返回 None，由调用方退避。
+        彻底杜绝旧实现里 has_login 恒 True 导致的无限递归（RecursionError + 刷屏）。"""
         remaining = self._in_cooldown()
         if remaining > 0:
             logger.warning(f"风控冷却中，跳过 token 请求，剩余 {remaining}s")
             return None
-        if retry_count >= 3:
-            login_ok = await self.has_login()
-            if login_ok:
-                return await self.get_token(device_id, 0)
-            logger.error("Cookie已失效")
-            return None
 
-        t = str(int(time.time()) * 1000)
+        MAX_ATTEMPTS = 6        # token 请求总次数上限
+        relogin_checked = False  # has_login 复核只做一次，避免再退化成无限重置
         data_val = f'{{"appKey":"444e9908a51d1cb236a27862abc769c9","deviceId":"{device_id}"}}'
-        token = self.cookies.get("_m_h5_tk", "").split("_")[0]
-        sign = generate_sign(t, token, data_val)
 
-        params = {
-            "jsv": "2.7.2", "appKey": "34839810", "t": t, "sign": sign,
-            "v": "1.0", "type": "originaljson", "accountSite": "xianyu",
-            "dataType": "json", "timeout": "20000",
-            "api": "mtop.taobao.idlemessage.pc.login.token",
-            "sessionOption": "AutoLoginOnly",
-        }
+        for attempt in range(MAX_ATTEMPTS):
+            res = await self._signed_post("mtop.taobao.idlemessage.pc.login.token", data_val)
+            if res is None:
+                continue
 
-        async with aiohttp.ClientSession(headers=self._headers, cookies=self.cookies) as session:
-            async with session.post(
-                "https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/",
-                params=params, data={"data": data_val}
-            ) as resp:
-                res = await resp.json()
-                for cookie in resp.cookies.values():
-                    self.cookies[cookie.key] = cookie.value
+            ret_value = res.get("ret", [])
+            if any("SUCCESS" in r for r in ret_value):
+                logger.info("Token获取成功")
+                return res
 
-        if not isinstance(res, dict):
-            return await self.get_token(device_id, retry_count + 1)
+            error_msg = str(ret_value)
+            if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
+                self._trip_risk_control(ret_value)
+                return None
 
-        ret_value = res.get("ret", [])
-        if any("SUCCESS" in r for r in ret_value):
-            logger.info("Token获取成功")
-            return res
+            if self._is_token_expired(ret_value):
+                # 作废本地 token，下次循环用服务端刚下发的新 _m_h5_tk 重新签名握手
+                self._expire_local_token()
 
-        error_msg = str(ret_value)
-        if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
-            self._trip_risk_control(ret_value)
-            return None
+            logger.warning(f"Token API调用失败: {ret_value}")
 
-        logger.warning(f"Token API调用失败: {ret_value}")
-        return await self.get_token(device_id, retry_count + 1)
+            # 连续失败到一半时，复核 passport 登录态：失效则无谓再试，直接返回
+            if not relogin_checked and attempt >= 2:
+                relogin_checked = True
+                if not await self.has_login():
+                    logger.error("Cookie已失效")
+                    return None
+
+        logger.error(f"Token获取失败，已重试 {MAX_ATTEMPTS} 次仍未成功")
+        return None
 
     async def has_login(self) -> bool:
         url = "https://passport.goofish.com/newlogin/hasLogin.do"
@@ -103,61 +139,40 @@ class XianyuApis:
             "ltl": "true", "appName": "xianyu", "appEntrance": "web",
             "fromSite": "77", "lang": "zh_CN",
         }
-        async with aiohttp.ClientSession(headers=self._headers, cookies=self.cookies) as session:
-            async with session.post(url, params={"appName": "xianyu", "fromSite": "77"}, data=data) as resp:
-                res = await resp.json()
-                for cookie in resp.cookies.values():
-                    self.cookies[cookie.key] = cookie.value
+        async with self._mtop_lock:
+            async with aiohttp.ClientSession(headers=self._headers, cookies=self.cookies) as session:
+                async with session.post(url, params={"appName": "xianyu", "fromSite": "77"}, data=data) as resp:
+                    res = await resp.json()
+                    for cookie in resp.cookies.values():
+                        self.cookies[cookie.key] = cookie.value
         return res.get("content", {}).get("success", False)
 
     async def get_item_info(self, item_id: str, retry_count: int = 0) -> dict:
         remaining = self._in_cooldown()
         if remaining > 0:
             return {"error": f"风控冷却中，剩余 {remaining}s"}
-        if retry_count >= 3:
-            return {"error": "获取商品信息失败"}
 
-        t = str(int(time.time()) * 1000)
         data_val = f'{{"itemId":"{item_id}"}}'
-        token = self.cookies.get("_m_h5_tk", "").split("_")[0]
-        sign = generate_sign(t, token, data_val)
-
-        params = {
-            "jsv": "2.7.2", "appKey": "34839810", "t": t, "sign": sign,
-            "v": "1.0", "type": "originaljson", "accountSite": "xianyu",
-            "dataType": "json", "timeout": "20000",
-            "api": "mtop.taobao.idle.pc.detail",
-            "sessionOption": "AutoLoginOnly",
-        }
-
-        async with aiohttp.ClientSession(headers=self._headers, cookies=self.cookies) as session:
-            async with session.post(
-                "https://h5api.m.goofish.com/h5/mtop.taobao.idle.pc.detail/1.0/",
-                params=params, data={"data": data_val}
-            ) as resp:
-                res = await resp.json()
-                for cookie in resp.cookies.values():
-                    self.cookies[cookie.key] = cookie.value
-
-        if isinstance(res, dict):
-            ret_value = res.get("ret", [])
-            if any("SUCCESS" in r for r in ret_value):
-                return res
-            error_msg = str(ret_value)
-            if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
-                self._trip_risk_control(ret_value)
-                return {"error": f"风控: {ret_value}"}
-        return await self.get_item_info(item_id, retry_count + 1)
+        for _ in range(3):
+            res = await self._signed_post("mtop.taobao.idle.pc.detail", data_val)
+            if res is not None:
+                ret_value = res.get("ret", [])
+                if any("SUCCESS" in r for r in ret_value):
+                    return res
+                error_msg = str(ret_value)
+                if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
+                    self._trip_risk_control(ret_value)
+                    return {"error": f"风控: {ret_value}"}
+                if self._is_token_expired(ret_value):
+                    self._expire_local_token()
+        return {"error": "获取商品信息失败"}
 
     async def get_item_list_info(self, user_id: str, page_number: int = 1, page_size: int = 20, retry_count: int = 0) -> dict:
         """获取卖家自己发布的商品列表（mtop.idle.web.xyh.item.list）。"""
         remaining = self._in_cooldown()
         if remaining > 0:
             return {"error": f"风控冷却中，剩余 {remaining}s"}
-        if retry_count >= 3:
-            return {"error": "获取商品列表失败，重试次数过多"}
 
-        t = str(int(time.time()) * 1000)
         data = {
             "needGroupInfo": False,
             "pageNumber": page_number,
@@ -168,43 +183,27 @@ class XianyuApis:
             "userId": user_id,
         }
         data_val = json.dumps(data, separators=(",", ":"))
-        token = self.cookies.get("_m_h5_tk", "").split("_")[0]
-        sign = generate_sign(t, token, data_val)
+        for _ in range(3):
+            res = await self._signed_post(
+                "mtop.idle.web.xyh.item.list", data_val,
+                extra_params={"spm_cnt": "a21ybx.im.0.0"},
+            )
+            if res is None:
+                continue
+            ret_value = res.get("ret", [])
+            if any("SUCCESS" in r for r in ret_value):
+                card_list = res.get("data", {}).get("cardList", [])
+                items = [c.get("cardData", {}) for c in card_list if c.get("cardData")]
+                return {"success": True, "items": items, "page": page_number}
 
-        params = {
-            "jsv": "2.7.2", "appKey": "34839810", "t": t, "sign": sign,
-            "v": "1.0", "type": "originaljson", "accountSite": "xianyu",
-            "dataType": "json", "timeout": "20000",
-            "api": "mtop.idle.web.xyh.item.list",
-            "sessionOption": "AutoLoginOnly",
-            "spm_cnt": "a21ybx.im.0.0",
-        }
-
-        async with aiohttp.ClientSession(headers=self._headers, cookies=self.cookies) as session:
-            async with session.post(
-                "https://h5api.m.goofish.com/h5/mtop.idle.web.xyh.item.list/1.0/",
-                params=params, data={"data": data_val}
-            ) as resp:
-                res = await resp.json()
-                for cookie in resp.cookies.values():
-                    self.cookies[cookie.key] = cookie.value
-
-        if not isinstance(res, dict):
-            return await self.get_item_list_info(user_id, page_number, page_size, retry_count + 1)
-
-        ret_value = res.get("ret", [])
-        if any("SUCCESS" in r for r in ret_value):
-            card_list = res.get("data", {}).get("cardList", [])
-            items = [c.get("cardData", {}) for c in card_list if c.get("cardData")]
-            return {"success": True, "items": items, "page": page_number}
-
-        error_msg = str(ret_value)
-        if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
-            self._trip_risk_control(ret_value)
-            return {"error": f"风控: {ret_value}"}
-
-        logger.warning(f"商品列表API调用失败 page={page_number}: {ret_value}")
-        return await self.get_item_list_info(user_id, page_number, page_size, retry_count + 1)
+            error_msg = str(ret_value)
+            if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
+                self._trip_risk_control(ret_value)
+                return {"error": f"风控: {ret_value}"}
+            if self._is_token_expired(ret_value):
+                self._expire_local_token()
+            logger.warning(f"商品列表API调用失败 page={page_number}: {ret_value}")
+        return {"error": "获取商品列表失败，重试次数过多"}
 
     async def get_all_items(self, user_id: str, page_size: int = 20, max_pages: int | None = None) -> list:
         """分页拉取所有商品，返回 cardData 列表。"""

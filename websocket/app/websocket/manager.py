@@ -785,7 +785,10 @@ class XianyuLive:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"Token 刷新循环出错: {e}")
+                # 刷新链路意外异常也要退避，否则 refresh() 没更新 last_refresh_time，
+                # needs_refresh() 恒 True，下一轮 60s 后必再触发，变成周期性风暴。
+                backoff_until = time.time() + self.token_mgr.retry_interval
+                logger.error(f"Token 刷新循环出错: {e}，{self.token_mgr.retry_interval}s 后重试")
 
     async def heartbeat_loop(self, ws):
         while True:
