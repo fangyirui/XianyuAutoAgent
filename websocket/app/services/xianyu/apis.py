@@ -37,8 +37,14 @@ class XianyuApis:
                 cookies[parts[0]] = parts[1]
         return cookies
 
-    def _cookie_header(self) -> str:
+    @property
+    def cookie_str(self) -> str:
+        """实时 cookie 串：含每次 mtop 请求经 Set-Cookie 滚动续期后的最新值。
+        WebSocket 握手 header 与持久化都应取这里，而非 __init__ 的初始快照。"""
         return "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+
+    def _cookie_header(self) -> str:
+        return self.cookie_str
 
     async def get_token(self, device_id: str, retry_count: int = 0) -> dict | None:
         remaining = self._in_cooldown()

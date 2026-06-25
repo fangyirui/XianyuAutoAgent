@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlalchemy import select, update, func
 from common.core import settings
 from common.db import AsyncSessionLocal, redis_client
-from common.models import Conversation, Message, ItemCache
+from common.models import Conversation, Message, ItemCache, Seller
 from common.utils import generate_mid, generate_uuid, generate_device_id, trans_cookies
 from ..services.xianyu import XianyuApis, TokenManager
 from ..services.xianyu.message_handler import (
@@ -45,6 +45,8 @@ class XianyuLive:
         self.last_heartbeat_time = 0.0
         self.last_heartbeat_response = 0.0
         self.connection_restart_flag = False
+        # 最近一次已落库的 cookie 串：避免每次刷新都写库，仅在真正变化时持久化
+        self._persisted_cookie_str = cookies_str
 
         self.manual_mode_conversations: set = set()
         self.manual_mode_timestamps: dict = {}
@@ -716,6 +718,75 @@ class XianyuLive:
         return first_id
 
 
+    async def _persist_cookies(self):
+        """把 apis 滚动续期后的最新 cookie 写回 sellers 表。
+
+        闲鱼登录态（_m_h5_tk / cookie2 等）是滑动过期的：每次 mtop 请求服务端会
+        通过 Set-Cookie 回一份续期值，apis 已接住并存于 self.apis.cookies。若不落库，
+        容器一重启就退回 .env / 旧 sellers 记录里几天前的快照，等于白滚——这正是
+        手配 cookie 一两天就失效的根因之一。仅在 cookie 真正变化时写，避免无谓写库。"""
+        latest = self.apis.cookie_str
+        if latest == self._persisted_cookie_str:
+            return
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    update(Seller)
+                    .where(Seller.user_id == str(self.myid))
+                    .values(cookies_str=latest, last_login_at=func.now())
+                )
+                if not result.rowcount:
+                    # 纯 .env 模式：sellers 表还没有本账号的行，插一条让续期成果重启可用。
+                    # user_id = cookie 里的 unb，与扫码登录建行口径一致。
+                    db.add(Seller(
+                        user_id=str(self.myid),
+                        cookies_str=latest,
+                        is_active=True,
+                        last_login_at=func.now(),
+                    ))
+                await db.commit()
+            self._persisted_cookie_str = latest
+            logger.info("滚动续期 cookie 已持久化到 sellers 表")
+        except Exception as e:
+            logger.warning(f"持久化 cookie 失败（不影响运行）: {e}")
+
+    async def token_refresh_loop(self):
+        """连接存活期间的定时刷新/保活循环。
+
+        闲鱼长连的 Cookie / token 只在握手 + /reg 注册时用一次，连接建立后靠心跳维持，
+        服务端不会因初始 cookie 快照过期而主动断开这条已建立的长连。真正会失败的是
+        断线后“重连”握手用到几天前的旧快照。所以这里不打断长连，只周期性打 mtop 接口
+        让 token / cookie 滚动续期（refresh 经 Set-Cookie 续期 cookie）并落库——下次因
+        网络原因自然重连时，run() 会从 apis.cookie_str 取到最新值，握手不再用过期快照。"""
+        # 刷新失败（cookie 真失效）后的退避截止时间：在此之前不再打 token 接口，
+        # 避免 needs_refresh() 恒为 true 导致每 60s 死循环重试、徒增风控风险。
+        backoff_until = 0.0
+        while True:
+            try:
+                await asyncio.sleep(60)
+                if self.connection_restart_flag:
+                    return
+                if not self.token_mgr.needs_refresh():
+                    continue
+                if time.time() < backoff_until:
+                    continue
+                logger.info("Token 到刷新点，定时刷新中...")
+                token = await self.token_mgr.refresh()
+                # 无论刷新成败，apis.cookies 都可能已被本次请求滚动续期，尝试落库
+                await self._persist_cookies()
+                if token:
+                    backoff_until = 0.0
+                    logger.info("定时刷新成功，token / cookie 已滚动续期（保持长连）")
+                else:
+                    backoff_until = time.time() + self.token_mgr.retry_interval
+                    logger.warning(
+                        f"定时刷新失败，{self.token_mgr.retry_interval}s 后重试（保持当前连接）"
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Token 刷新循环出错: {e}")
+
     async def heartbeat_loop(self, ws):
         while True:
             try:
@@ -741,6 +812,7 @@ class XianyuLive:
                 if self.token_mgr.needs_refresh():
                     logger.info("Token需要刷新...")
                     await self.token_mgr.refresh()
+                    await self._persist_cookies()
                     logger.info("Token刷新完成")
                 if not self.token_mgr.current_token:
                     remaining = int(self.apis.risk_control_until - time.time())
@@ -754,7 +826,9 @@ class XianyuLive:
                     continue
 
                 headers = {
-                    "Cookie": self.cookies_str,
+                    # 取 apis 维护的实时 cookie（含滚动续期），而非 __init__ 的初始快照，
+                    # 否则重连永远用旧 cookie，初始快照一过期就连不上。
+                    "Cookie": self.apis.cookie_str,
                     "Host": "wss-goofish.dingtalk.com",
                     "Connection": "Upgrade",
                     "Pragma": "no-cache",
@@ -810,6 +884,8 @@ class XianyuLive:
 
                     # 启动心跳任务
                     hb_task = asyncio.create_task(self.heartbeat_loop(ws))
+                    # 启动定时刷新/保活任务：连接存活期间持续滚动 token 与 cookie
+                    refresh_task = asyncio.create_task(self.token_refresh_loop())
 
                     async for raw in ws:
                         try:
@@ -856,10 +932,12 @@ class XianyuLive:
                             logger.debug(f"原始消息: {raw}")
 
                     hb_task.cancel()
-                    try:
-                        await hb_task
-                    except asyncio.CancelledError:
-                        pass
+                    refresh_task.cancel()
+                    for _t in (hb_task, refresh_task):
+                        try:
+                            await _t
+                        except asyncio.CancelledError:
+                            pass
 
             except websockets.exceptions.ConnectionClosed as e:
                 logger.warning(f"WebSocket连接关闭: code={e.code}, reason={e.reason}")
