@@ -77,17 +77,6 @@ class XianyuApis:
                         self.cookies[cookie.key] = cookie.value
         return res if isinstance(res, dict) else None
 
-    @staticmethod
-    def _is_token_expired(ret_value) -> bool:
-        msg = str(ret_value)
-        # 注意：服务端实际返回的是拼写错误的 FAIL_SYS_TOKEN_EXOIRED，一并匹配
-        return "TOKEN_EXPIRED" in msg or "TOKEN_EXOIRED" in msg or "令牌过期" in msg
-
-    def _expire_local_token(self):
-        """主动作废本地 _m_h5_tk，逼下一次请求走干净的两步握手，
-        而不是拿可能已脏的旧 token 反复签名。"""
-        self.cookies.pop("_m_h5_tk", None)
-
     async def get_token(self, device_id: str, retry_count: int = 0) -> dict | None:
         """获取登录 token。有限重试（不再递归）：最多 MAX_ATTEMPTS 次请求，
         其间允许一次 has_login 复核重置；耗尽即返回 None，由调用方退避。
@@ -116,10 +105,9 @@ class XianyuApis:
                 self._trip_risk_control(ret_value)
                 return None
 
-            if self._is_token_expired(ret_value):
-                # 作废本地 token，下次循环用服务端刚下发的新 _m_h5_tk 重新签名握手
-                self._expire_local_token()
-
+            # token 过期是两步握手的第一步：本次请求已通过 Set-Cookie 接住服务端新下发的
+            # _m_h5_tk（见 _signed_post），下一次 attempt 直接拿它签名即为正确的第二步。
+            # 切勿在此 pop 掉新 token，否则永远停在第一步、握手完不成（持续刷屏 EXOIRED）。
             logger.warning(f"Token API调用失败: {ret_value}")
 
             # 连续失败到一半时，复核 passport 登录态：失效则无谓再试，直接返回
@@ -163,8 +151,7 @@ class XianyuApis:
                 if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
                     self._trip_risk_control(ret_value)
                     return {"error": f"风控: {ret_value}"}
-                if self._is_token_expired(ret_value):
-                    self._expire_local_token()
+                # token 过期：本次已接住 Set-Cookie 新 token，下一轮循环自然走第二步握手
         return {"error": "获取商品信息失败"}
 
     async def get_item_list_info(self, user_id: str, page_number: int = 1, page_size: int = 20, retry_count: int = 0) -> dict:
@@ -200,8 +187,7 @@ class XianyuApis:
             if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
                 self._trip_risk_control(ret_value)
                 return {"error": f"风控: {ret_value}"}
-            if self._is_token_expired(ret_value):
-                self._expire_local_token()
+            # token 过期：本次已接住 Set-Cookie 新 token，下一轮循环自然走第二步握手
             logger.warning(f"商品列表API调用失败 page={page_number}: {ret_value}")
         return {"error": "获取商品列表失败，重试次数过多"}
 
