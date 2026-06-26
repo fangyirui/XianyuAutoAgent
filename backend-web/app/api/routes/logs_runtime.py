@@ -18,7 +18,7 @@ def _verify_token_param(token: str = Query(None)):
 
 
 @router.get("/history", dependencies=[Depends(get_current_user)])
-async def runtime_logs_history(limit: int = 200):
+async def runtime_logs_history(limit: int = 2000):
     url = f"{settings.WEBSOCKET_SERVICE_URL}/api/logs/history?limit={limit}"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:

@@ -36,7 +36,7 @@ export default function RuntimeLogsPage() {
 
     const loadHistory = async () => {
       try {
-        const { data } = await request.get('/logs/runtime/history', { params: { limit: 200 } })
+        const { data } = await request.get('/logs/runtime/history', { params: { limit: 2000 } })
         if (!cancelled) setLogs(data)
       } catch { /* axios interceptor handles 401 / redirect to /login */ }
     }
@@ -51,7 +51,7 @@ export default function RuntimeLogsPage() {
         if (pausedRef.current) return
         try {
           const entry: LogEntry = JSON.parse(e.data)
-          setLogs((prev) => [...prev.slice(-499), entry])
+          setLogs((prev) => [...prev.slice(-1999), entry])
         } catch { /* ignore parse error */ }
       }
       es.onerror = async () => {

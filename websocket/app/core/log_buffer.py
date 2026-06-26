@@ -3,7 +3,7 @@ from collections import deque
 from datetime import datetime
 from typing import List
 
-_buffer: deque = deque(maxlen=500)
+_buffer: deque = deque(maxlen=2000)
 _subscribers: List[asyncio.Queue] = []
 
 
@@ -23,7 +23,7 @@ def sink(message):
             pass
 
 
-def get_history(limit: int = 200) -> List[dict]:
+def get_history(limit: int = 2000) -> List[dict]:
     items = list(_buffer)
     return items[-limit:]
 
