@@ -7,6 +7,7 @@ from common.utils import generate_sign
 
 
 RISK_CONTROL_COOLDOWN = 600  # 触发风控后的冷却秒数（10分钟）
+NONE_RETRY_BACKOFF = 2  # _signed_post 返回 None（网络抖动/非 JSON 响应）时的重试间隔秒数
 
 
 class XianyuApis:
@@ -77,7 +78,7 @@ class XianyuApis:
                         self.cookies[cookie.key] = cookie.value
         return res if isinstance(res, dict) else None
 
-    async def get_token(self, device_id: str, retry_count: int = 0) -> dict | None:
+    async def get_token(self, device_id: str) -> dict | None:
         """获取登录 token。有限重试（不再递归）：最多 MAX_ATTEMPTS 次请求，
         其间允许一次 has_login 复核重置；耗尽即返回 None，由调用方退避。
         彻底杜绝旧实现里 has_login 恒 True 导致的无限递归（RecursionError + 刷屏）。"""
@@ -93,6 +94,7 @@ class XianyuApis:
         for attempt in range(MAX_ATTEMPTS):
             res = await self._signed_post("mtop.taobao.idlemessage.pc.login.token", data_val)
             if res is None:
+                await asyncio.sleep(NONE_RETRY_BACKOFF)
                 continue
 
             ret_value = res.get("ret", [])
@@ -135,7 +137,7 @@ class XianyuApis:
                         self.cookies[cookie.key] = cookie.value
         return res.get("content", {}).get("success", False)
 
-    async def get_item_info(self, item_id: str, retry_count: int = 0) -> dict:
+    async def get_item_info(self, item_id: str) -> dict:
         remaining = self._in_cooldown()
         if remaining > 0:
             return {"error": f"风控冷却中，剩余 {remaining}s"}
@@ -143,18 +145,20 @@ class XianyuApis:
         data_val = f'{{"itemId":"{item_id}"}}'
         for _ in range(3):
             res = await self._signed_post("mtop.taobao.idle.pc.detail", data_val)
-            if res is not None:
-                ret_value = res.get("ret", [])
-                if any("SUCCESS" in r for r in ret_value):
-                    return res
-                error_msg = str(ret_value)
-                if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
-                    self._trip_risk_control(ret_value)
-                    return {"error": f"风控: {ret_value}"}
-                # token 过期：本次已接住 Set-Cookie 新 token，下一轮循环自然走第二步握手
+            if res is None:
+                await asyncio.sleep(NONE_RETRY_BACKOFF)
+                continue
+            ret_value = res.get("ret", [])
+            if any("SUCCESS" in r for r in ret_value):
+                return res
+            error_msg = str(ret_value)
+            if "RGV587_ERROR" in error_msg or "被挤爆啦" in error_msg:
+                self._trip_risk_control(ret_value)
+                return {"error": f"风控: {ret_value}"}
+            # token 过期：本次已接住 Set-Cookie 新 token，下一轮循环自然走第二步握手
         return {"error": "获取商品信息失败"}
 
-    async def get_item_list_info(self, user_id: str, page_number: int = 1, page_size: int = 20, retry_count: int = 0) -> dict:
+    async def get_item_list_info(self, user_id: str, page_number: int = 1, page_size: int = 20) -> dict:
         """获取卖家自己发布的商品列表（mtop.idle.web.xyh.item.list）。"""
         remaining = self._in_cooldown()
         if remaining > 0:
@@ -176,6 +180,7 @@ class XianyuApis:
                 extra_params={"spm_cnt": "a21ybx.im.0.0"},
             )
             if res is None:
+                await asyncio.sleep(NONE_RETRY_BACKOFF)
                 continue
             ret_value = res.get("ret", [])
             if any("SUCCESS" in r for r in ret_value):
