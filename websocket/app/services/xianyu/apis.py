@@ -116,10 +116,16 @@ class XianyuApis:
                 self._trip_risk_control(ret_value)
                 return None
 
-            # token 过期是两步握手的第一步：本次请求已通过 Set-Cookie 接住服务端新下发的
-            # _m_h5_tk（见 _signed_post），下一次 attempt 直接拿它签名即为正确的第二步。
-            # 切勿在此 pop 掉新 token，否则永远停在第一步、握手完不成（持续刷屏 EXOIRED）。
             logger.warning(f"Token API调用失败: {ret_value}")
+
+            # 两步握手的真正触发条件是 _m_h5_tk 为空：mtop 在 token 非空时只校验、不主动
+            # 重发，所以一旦本地存着一个已坏死的 token，就会“用坏 token 签名→被拒→服务端
+            # 不下发新 token”地死循环（诊断日志表现为 tk_before==tk_after 持续“未变”）。
+            # 故此：本轮失败且 token 未经 Set-Cookie 续期时，主动清空 _m_h5_tk，逼下一轮
+            # 以空 token 请求，触发服务端走第一步下发新 token。
+            if tk_after and tk_before == tk_after:
+                self.cookies.pop("_m_h5_tk", None)
+                logger.warning("token 未续期且签名被拒，已清空 _m_h5_tk 以触发重新下发")
 
             # 连续失败到一半时，复核 passport 登录态：失效则无谓再试，直接返回
             if not relogin_checked and attempt >= 2:

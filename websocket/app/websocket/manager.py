@@ -428,7 +428,7 @@ class XianyuLive:
         # 不重试、不记日志，可靠队列对其毫无保护。这里逐条处理，杜绝"消息被吞且无痕迹"。
         data_list = message_data["body"]["syncPushPackage"]["data"]
         if len(data_list) > 1:
-            logger.warning(f"同步包内含 {len(data_list)} 条数据，逐条处理（此前仅处理首条会丢消息）")
+            logger.warning(f"同步包内含 {len(data_list)} 条数据，逐条处理")
         for sync_data in data_list:
             try:
                 await self._handle_one_sync(sync_data, ws)
