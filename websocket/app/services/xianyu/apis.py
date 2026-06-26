@@ -92,7 +92,16 @@ class XianyuApis:
         data_val = f'{{"appKey":"444e9908a51d1cb236a27862abc769c9","deviceId":"{device_id}"}}'
 
         for attempt in range(MAX_ATTEMPTS):
+            tk_before = self.cookies.get("_m_h5_tk", "")
             res = await self._signed_post("mtop.taobao.idlemessage.pc.login.token", data_val)
+            tk_after = self.cookies.get("_m_h5_tk", "")
+            # 两步握手诊断：tk_before/tk_after 不同说明服务端经 Set-Cookie 下发了新 token，
+            # 下一轮 attempt 理应用 tk_after 签名成功；若始终相同则是没续期（卡在第一步）。
+            logger.debug(
+                f"[token握手] attempt={attempt} "
+                f"tk_before={tk_before[:24] or '<空>'} -> tk_after={tk_after[:24] or '<空>'} "
+                f"{'变化' if tk_before != tk_after else '未变'}"
+            )
             if res is None:
                 await asyncio.sleep(NONE_RETRY_BACKOFF)
                 continue
