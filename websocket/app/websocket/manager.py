@@ -423,7 +423,21 @@ class XianyuLive:
     async def handle_message(self, message_data: dict, ws):
         if not is_sync_package(message_data):
             return
-        sync_data = message_data["body"]["syncPushPackage"]["data"][0]
+        # syncPushPackage.data 是数组：闲鱼会把多条变更打包进同一个推送包（注册后回放
+        # 离线消息、买家连发、积压等）。此前只取 data[0]，data[1:] 被静默丢弃——既不入队、
+        # 不重试、不记日志，可靠队列对其毫无保护。这里逐条处理，杜绝"消息被吞且无痕迹"。
+        data_list = message_data["body"]["syncPushPackage"]["data"]
+        if len(data_list) > 1:
+            logger.warning(f"同步包内含 {len(data_list)} 条数据，逐条处理（此前仅处理首条会丢消息）")
+        for sync_data in data_list:
+            try:
+                await self._handle_one_sync(sync_data, ws)
+            except Exception as e:
+                logger.error(f"处理单条同步数据出错（跳过该条，不影响同包其余）: {e}")
+
+    async def _handle_one_sync(self, sync_data: dict, ws):
+        """处理同步包内的单条数据：解密 + 全部 intake 门控 + 入队。
+        从 handle_message 拆出，使一个推送包内的多条消息都能被逐条处理。"""
         message = decrypt_sync_data(sync_data)
         if not message:
             return
