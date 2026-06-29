@@ -74,8 +74,18 @@ class XianyuApis:
             async with aiohttp.ClientSession(headers=self._headers, cookies=self.cookies) as session:
                 async with session.post(url, params=params, data={"data": data_val}) as resp:
                     res = await resp.json()
+                    # 诊断：直接看原始 Set-Cookie 头里有哪些 cookie 名（不打值，避免泄露凭证）。
+                    # 与下面 resp.cookies 解析出的名字对比——若原始头里有 _m_h5_tk 而
+                    # resp.cookies 没解析出来，就是 aiohttp 漏接续期，定位到客户端侧。
+                    raw_set_cookie = resp.headers.getall("Set-Cookie", [])
+                    raw_names = [c.split("=", 1)[0].strip() for c in raw_set_cookie]
                     for cookie in resp.cookies.values():
                         self.cookies[cookie.key] = cookie.value
+                    parsed_names = list(resp.cookies.keys())
+                    logger.debug(
+                        f"[setcookie] api={api.split('.')[-1]} "
+                        f"原始头={raw_names or '<无>'} 已解析={parsed_names or '<无>'}"
+                    )
         return res if isinstance(res, dict) else None
 
     async def get_token(self, device_id: str) -> dict | None:
@@ -150,7 +160,11 @@ class XianyuApis:
                     res = await resp.json()
                     for cookie in resp.cookies.values():
                         self.cookies[cookie.key] = cookie.value
-        return res.get("content", {}).get("success", False)
+        success = res.get("content", {}).get("success", False)
+        # 诊断：打印 passport 登录态复核结果。若 success=True 却仍拿不到 token，
+        # 说明登录态没真失效，问题在 mtop 侧 token 下发；False 则是 Cookie 真过期需重登。
+        logger.debug(f"[haslogin] success={success} resultCode={res.get('content', {}).get('data', {}).get('resultCode')}")
+        return success
 
     async def get_item_info(self, item_id: str) -> dict:
         remaining = self._in_cooldown()
