@@ -51,6 +51,26 @@ class XianyuApis:
     def _cookie_header(self) -> str:
         return self.cookie_str
 
+    def _absorb_set_cookies(self, resp) -> list[str]:
+        """从响应的原始 Set-Cookie 头解析并写回 self.cookies，返回写回的 cookie 名列表。
+
+        不能用 aiohttp 的 resp.cookies：它底层是 http.cookies.SimpleCookie，遇到闲鱼下发的
+        Partitioned（CHIPS）属性会解析失败，把整批 cookie 静默丢弃——表现为 _m_h5_tk 明明
+        在原始 Set-Cookie 头里，却进不了 self.cookies，两步握手第二步永远拿不到续期 token
+        （持续刷屏 FAIL_SYS_TOKEN_EXOIRED）。这里只取每条 Set-Cookie 分号前的 name=value，
+        绕开属性解析，从根上接住续期。"""
+        names = []
+        for raw in resp.headers.getall("Set-Cookie", []):
+            first = raw.split(";", 1)[0].strip()
+            if "=" not in first:
+                continue
+            k, v = first.split("=", 1)
+            k = k.strip()
+            if k:
+                self.cookies[k] = v.strip()
+                names.append(k)
+        return names
+
     async def _signed_post(self, api: str, data_val: str, extra_params: dict | None = None) -> dict | None:
         """执行一次签名 mtop 请求并接住 Set-Cookie 续期，整段在锁内原子完成。
 
@@ -74,18 +94,7 @@ class XianyuApis:
             async with aiohttp.ClientSession(headers=self._headers, cookies=self.cookies) as session:
                 async with session.post(url, params=params, data={"data": data_val}) as resp:
                     res = await resp.json()
-                    # 诊断：直接看原始 Set-Cookie 头里有哪些 cookie 名（不打值，避免泄露凭证）。
-                    # 与下面 resp.cookies 解析出的名字对比——若原始头里有 _m_h5_tk 而
-                    # resp.cookies 没解析出来，就是 aiohttp 漏接续期，定位到客户端侧。
-                    raw_set_cookie = resp.headers.getall("Set-Cookie", [])
-                    raw_names = [c.split("=", 1)[0].strip() for c in raw_set_cookie]
-                    for cookie in resp.cookies.values():
-                        self.cookies[cookie.key] = cookie.value
-                    parsed_names = list(resp.cookies.keys())
-                    logger.debug(
-                        f"[setcookie] api={api.split('.')[-1]} "
-                        f"原始头={raw_names or '<无>'} 已解析={parsed_names or '<无>'}"
-                    )
+                    self._absorb_set_cookies(resp)
         return res if isinstance(res, dict) else None
 
     async def get_token(self, device_id: str) -> dict | None:
@@ -102,16 +111,7 @@ class XianyuApis:
         data_val = f'{{"appKey":"444e9908a51d1cb236a27862abc769c9","deviceId":"{device_id}"}}'
 
         for attempt in range(MAX_ATTEMPTS):
-            tk_before = self.cookies.get("_m_h5_tk", "")
             res = await self._signed_post("mtop.taobao.idlemessage.pc.login.token", data_val)
-            tk_after = self.cookies.get("_m_h5_tk", "")
-            # 两步握手诊断：tk_before/tk_after 不同说明服务端经 Set-Cookie 下发了新 token，
-            # 下一轮 attempt 理应用 tk_after 签名成功；若始终相同则是没续期（卡在第一步）。
-            logger.debug(
-                f"[token握手] attempt={attempt} "
-                f"tk_before={tk_before[:24] or '<空>'} -> tk_after={tk_after[:24] or '<空>'} "
-                f"{'变化' if tk_before != tk_after else '未变'}"
-            )
             if res is None:
                 await asyncio.sleep(NONE_RETRY_BACKOFF)
                 continue
@@ -126,16 +126,10 @@ class XianyuApis:
                 self._trip_risk_control(ret_value)
                 return None
 
+            # token 过期是两步握手的第一步：本次请求已通过 Set-Cookie 接住服务端新下发的
+            # _m_h5_tk（见 _signed_post → _absorb_set_cookies），下一次 attempt 直接拿它
+            # 签名即为正确的第二步。切勿在此 pop 掉新 token，否则永远停在第一步、握手完不成。
             logger.warning(f"Token API调用失败: {ret_value}")
-
-            # 两步握手的真正触发条件是 _m_h5_tk 为空：mtop 在 token 非空时只校验、不主动
-            # 重发，所以一旦本地存着一个已坏死的 token，就会“用坏 token 签名→被拒→服务端
-            # 不下发新 token”地死循环（诊断日志表现为 tk_before==tk_after 持续“未变”）。
-            # 故此：本轮失败且 token 未经 Set-Cookie 续期时，主动清空 _m_h5_tk，逼下一轮
-            # 以空 token 请求，触发服务端走第一步下发新 token。
-            if tk_after and tk_before == tk_after:
-                self.cookies.pop("_m_h5_tk", None)
-                logger.warning("token 未续期且签名被拒，已清空 _m_h5_tk 以触发重新下发")
 
             # 连续失败到一半时，复核 passport 登录态：失效则无谓再试，直接返回
             if not relogin_checked and attempt >= 2:
@@ -158,13 +152,8 @@ class XianyuApis:
             async with aiohttp.ClientSession(headers=self._headers, cookies=self.cookies) as session:
                 async with session.post(url, params={"appName": "xianyu", "fromSite": "77"}, data=data) as resp:
                     res = await resp.json()
-                    for cookie in resp.cookies.values():
-                        self.cookies[cookie.key] = cookie.value
-        success = res.get("content", {}).get("success", False)
-        # 诊断：打印 passport 登录态复核结果。若 success=True 却仍拿不到 token，
-        # 说明登录态没真失效，问题在 mtop 侧 token 下发；False 则是 Cookie 真过期需重登。
-        logger.debug(f"[haslogin] success={success} resultCode={res.get('content', {}).get('data', {}).get('resultCode')}")
-        return success
+                    self._absorb_set_cookies(resp)
+        return res.get("content", {}).get("success", False)
 
     async def get_item_info(self, item_id: str) -> dict:
         remaining = self._in_cooldown()
