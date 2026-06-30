@@ -262,6 +262,13 @@ export default function LogsPage() {
   // - 上滚加载更早消息（前插，末条 id 不变）：不滚动，由 loadOlder 自行补偿滚动位置。
   const scrolledChatRef = useRef<string | null>(null)
   const lastMsgIdRef = useRef<number | null>(null)
+  // 用户是否停在消息面板底部附近（阈值 80px）。上滚看历史时即视为“不在底部”
+  const msgAtBottomRef = useRef(true)
+  const handleMsgScroll = () => {
+    const el = msgListRef.current
+    if (!el) return
+    msgAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }
   useEffect(() => {
     if (!bottomRef.current) return
     const isNewConv = scrolledChatRef.current !== selectedChat
@@ -271,7 +278,9 @@ export default function LogsPage() {
     lastMsgIdRef.current = lastId
     if (isNewConv) {
       bottomRef.current.scrollIntoView({ behavior: 'auto' })
-    } else if (lastChanged) {
+      msgAtBottomRef.current = true
+    } else if (lastChanged && msgAtBottomRef.current) {
+      // 已打开的会话追加新消息，且用户本就贴底时才跟随滚动；正在看上方历史时不打断
       bottomRef.current.scrollIntoView({ behavior: 'smooth' })
     }
   }, [messages, selectedChat])
@@ -491,7 +500,7 @@ export default function LogsPage() {
                 </p>
               </div>
             )}
-            <div ref={msgListRef} className="flex-1 overflow-auto p-5 space-y-3">
+            <div ref={msgListRef} onScroll={handleMsgScroll} className="flex-1 overflow-auto p-5 space-y-3">
               {!selectedChat && (
                 <p className="text-dark-400 text-sm text-center pt-8">选择一个会话查看消息</p>
               )}

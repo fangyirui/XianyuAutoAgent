@@ -42,14 +42,15 @@ export default function RuntimeLogsPage() {
     let retries = 0
     const MAX_RETRIES = 5
 
-    const loadHistory = async () => {
+    const loadHistory = async (): Promise<boolean> => {
       try {
         const { data } = await request.get('/logs/runtime/history', { params: { limit: PAGE_SIZE } })
         if (!cancelled) {
           setLogs(data.items)
           setLogHasMore(data.has_more)
         }
-      } catch { /* axios interceptor handles 401 / redirect to /login */ }
+        return true
+      } catch { /* axios interceptor handles 401 / redirect to /login */ return false }
     }
 
     const openStream = () => {
@@ -71,9 +72,10 @@ export default function RuntimeLogsPage() {
         es = null
         if (cancelled || retries >= MAX_RETRIES) return
         retries += 1
-        // Trigger axios call so the 401 interceptor refreshes the access token if needed
-        try { await request.get('/logs/runtime/history', { params: { limit: 1 } }) } catch { return }
-        if (cancelled) return
+        // 重连前整体重拉一次历史：既触发 axios 的 401 拦截器按需刷新 token，又用后端最新的
+        // id 空间替换本地日志——避免 websocket 进程重启后 _seq 归零、新日志 id 与本地残留旧
+        // id 撞车被去重逻辑误判为重复而静默丢弃。失败（网络/刷新失败）则放弃本次重连。
+        if (!(await loadHistory()) || cancelled) return
         const backoff = Math.min(1000 * 2 ** (retries - 1), 15000)
         retryTimer = setTimeout(openStream, backoff)
       }
