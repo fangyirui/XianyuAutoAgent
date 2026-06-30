@@ -18,8 +18,10 @@ def _verify_token_param(token: str = Query(None)):
 
 
 @router.get("/history", dependencies=[Depends(get_current_user)])
-async def runtime_logs_history(limit: int = 2000):
+async def runtime_logs_history(limit: int = 500, before_id: int | None = None):
     url = f"{settings.WEBSOCKET_SERVICE_URL}/api/logs/history?limit={limit}"
+    if before_id is not None:
+        url += f"&before_id={before_id}"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             return await resp.json()

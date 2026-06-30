@@ -5,9 +5,11 @@ export async function getConversations(page = 1, pageSize = 20) {
   return data as { items: any[]; total: number; page: number; page_size: number }
 }
 
-export async function getMessages(chatId: string) {
-  const { data } = await request.get(`/logs/conversations/${chatId}/messages`)
-  return data
+export async function getMessages(chatId: string, opts?: { beforeId?: number; limit?: number }) {
+  const { data } = await request.get(`/logs/conversations/${chatId}/messages`, {
+    params: { before_id: opts?.beforeId, limit: opts?.limit ?? 50 },
+  })
+  return data as { items: any[]; has_more: boolean }
 }
 
 export interface IntentItem {

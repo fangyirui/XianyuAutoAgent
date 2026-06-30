@@ -8,8 +8,8 @@ router = APIRouter(prefix="/logs", tags=["logs"])
 
 
 @router.get("/history")
-async def logs_history(limit: int = 2000):
-    return log_buffer.get_history(limit)
+async def logs_history(limit: int = 500, before_id: int | None = None):
+    return log_buffer.get_history(limit, before_id)
 
 
 @router.get("/stream")

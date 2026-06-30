@@ -113,16 +113,33 @@ async def list_conversations(
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/conversations/{chat_id}/messages", response_model=List[MessageOut])
-async def get_messages(chat_id: str, db: AsyncSession = Depends(get_db)):
+class MessagePage(BaseModel):
+    items: List[MessageOut]
+    has_more: bool
+
+
+@router.get("/conversations/{chat_id}/messages", response_model=MessagePage)
+async def get_messages(
+    chat_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    before_id: Optional[int] = Query(None, description="游标：只取 id 小于该值的更早消息"),
+    db: AsyncSession = Depends(get_db),
+):
     conv_result = await db.execute(select(Conversation).where(Conversation.chat_id == chat_id))
     conv = conv_result.scalar_one_or_none()
     if not conv:
-        return []
-    result = await db.execute(
-        select(Message).where(Message.conversation_id == conv.id).order_by(Message.created_at)
-    )
-    return result.scalars().all()
+        return MessagePage(items=[], has_more=False)
+    # 按 id 倒序取最近一页（before_id 时取更早一页），多取 1 条用于判断是否还有更早消息
+    stmt = select(Message).where(Message.conversation_id == conv.id)
+    if before_id is not None:
+        stmt = stmt.where(Message.id < before_id)
+    stmt = stmt.order_by(Message.id.desc()).limit(limit + 1)
+    result = await db.execute(stmt)
+    rows = list(result.scalars().all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    rows.reverse()  # 翻回正序供前端按时间从上到下渲染
+    return MessagePage(items=rows, has_more=has_more)
 
 
 class BatchDeleteRequest(BaseModel):

@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ScrollText, Pause, Play, Trash2, Search } from 'lucide-react'
 import request from '@/utils/request'
 
-interface LogEntry { time: string; level: string; message: string; module: string }
+interface LogEntry { id: number; time: string; level: string; message: string; module: string }
+
+const PAGE_SIZE = 500
 
 const LEVEL_COLORS: Record<string, string> = {
   ERROR: 'text-red-400',
@@ -22,7 +24,13 @@ export default function RuntimeLogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [paused, setPaused] = useState(false)
   const [filter, setFilter] = useState('')
+  const [logHasMore, setLogHasMore] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollBoxRef = useRef<HTMLDivElement>(null)
+  const topRef = useRef<HTMLDivElement>(null)
+  const atBottomRef = useRef(true)
+  const didInitialScrollRef = useRef(false)
   const pausedRef = useRef(false)
 
   useEffect(() => { pausedRef.current = paused }, [paused])
@@ -36,8 +44,11 @@ export default function RuntimeLogsPage() {
 
     const loadHistory = async () => {
       try {
-        const { data } = await request.get('/logs/runtime/history', { params: { limit: 2000 } })
-        if (!cancelled) setLogs(data)
+        const { data } = await request.get('/logs/runtime/history', { params: { limit: PAGE_SIZE } })
+        if (!cancelled) {
+          setLogs(data.items)
+          setLogHasMore(data.has_more)
+        }
       } catch { /* axios interceptor handles 401 / redirect to /login */ }
     }
 
@@ -51,7 +62,8 @@ export default function RuntimeLogsPage() {
         if (pausedRef.current) return
         try {
           const entry: LogEntry = JSON.parse(e.data)
-          setLogs((prev) => [...prev.slice(-1999), entry])
+          // 按 id 去重追加，保留最近 5000 条（与后端环形缓冲上限一致）
+          setLogs((prev) => (prev.some((l) => l.id === entry.id) ? prev : [...prev.slice(-4999), entry]))
         } catch { /* ignore parse error */ }
       }
       es.onerror = async () => {
@@ -77,9 +89,64 @@ export default function RuntimeLogsPage() {
     }
   }, [])
 
+  // 记录用户是否停在底部附近（阈值 80px）。滚到上方看旧日志时即视为“不在底部”
+  const handleScroll = () => {
+    const el = scrollBoxRef.current
+    if (!el) return
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }
+
   useEffect(() => {
-    if (!paused) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (paused) return
+    if (!didInitialScrollRef.current && logs.length > 0) {
+      // 首屏加载历史：瞬间跳到底，不走平滑动画（避免上千条从顶部慢慢滚下来）
+      didInitialScrollRef.current = true
+      bottomRef.current?.scrollIntoView({ behavior: 'auto' })
+      atBottomRef.current = true
+      return
+    }
+    // 仅当用户本就在底部附近时才跟随新日志滚动，正在看上方旧日志时不打断
+    if (atBottomRef.current) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs, paused])
+
+  // 向上滚到顶部哨兵时加载更早的日志（在环形缓冲至多 5000 条范围内翻页），前插后补偿滚动高度差保持视口不跳
+  const loadOlder = useCallback(async () => {
+    if (loadingOlder || !logHasMore) return
+    const oldest = logs[0]
+    if (!oldest) return
+    setLoadingOlder(true)
+    const el = scrollBoxRef.current
+    const prevHeight = el ? el.scrollHeight : 0
+    try {
+      const { data } = await request.get('/logs/runtime/history', {
+        params: { limit: PAGE_SIZE, before_id: oldest.id },
+      })
+      setLogs((cur) => {
+        const seen = new Set(cur.map((l) => l.id))
+        const older = (data.items as LogEntry[]).filter((l) => !seen.has(l.id))
+        return [...older, ...cur]
+      })
+      setLogHasMore(data.has_more)
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop += el.scrollHeight - prevHeight
+      })
+    } catch { /* axios interceptor handles 401 */ } finally {
+      setLoadingOlder(false)
+    }
+  }, [logs, logHasMore, loadingOlder])
+
+  useEffect(() => {
+    const el = topRef.current
+    if (!el) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && logHasMore && !loadingOlder) loadOlder()
+      },
+      { root: scrollBoxRef.current, threshold: 0.1 },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [logHasMore, loadingOlder, loadOlder])
 
   const filtered = filter
     ? logs.filter((l) => l.message.toLowerCase().includes(filter.toLowerCase()) || l.level.includes(filter.toUpperCase()))
@@ -116,9 +183,16 @@ export default function RuntimeLogsPage() {
       </div>
 
       <div className="card flex-1 overflow-hidden">
-        <div className="h-full overflow-auto font-mono text-xs leading-6 p-4 bg-dark-950/50">
-          {filtered.map((l, i) => (
-            <div key={i} className="flex gap-3 hover:bg-dark-800/30 -mx-2 px-2 rounded">
+        <div ref={scrollBoxRef} onScroll={handleScroll} className="h-full overflow-auto font-mono text-xs leading-6 p-4 bg-dark-950/50">
+          <div ref={topRef} />
+          {loadingOlder && (
+            <p className="text-dark-500 text-[11px] py-1 text-center">加载更早日志…</p>
+          )}
+          {!logHasMore && logs.length > 0 && (
+            <p className="text-dark-600 text-[11px] py-1 text-center">— 已到日志缓冲顶部（最多保留 5000 条）—</p>
+          )}
+          {filtered.map((l) => (
+            <div key={l.id} className="flex gap-3 hover:bg-dark-800/30 -mx-2 px-2 rounded">
               <span className="text-dark-500 shrink-0">{l.time}</span>
               <span className={`shrink-0 inline-flex items-center justify-center min-w-[60px] px-1.5 rounded text-[10px] font-semibold ${LEVEL_BG[l.level] || 'bg-dark-700 text-dark-300'}`}>
                 {l.level}

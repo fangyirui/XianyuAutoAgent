@@ -27,6 +27,28 @@ const INTENT_LABELS: Record<string, string> = {
   no_reply: '未回复',
 }
 
+// 今天的消息只显示时间，其他日期的消息额外带上日期（跨年再带上年份）
+function formatMsgTime(value: string, withSeconds = false): string {
+  const d = new Date(value)
+  const now = new Date()
+  const isToday =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  const time = d.toLocaleString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    ...(withSeconds ? { second: '2-digit' } : {}),
+  })
+  if (isToday) return time
+  const date = d.toLocaleString('zh-CN', {
+    ...(d.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+    month: '2-digit',
+    day: '2-digit',
+  })
+  return `${date} ${time}`
+}
+
 export default function LogsPage() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [messages, setMessages] = useState<Message[]>([])
@@ -38,7 +60,11 @@ export default function LogsPage() {
   const [deleting, setDeleting] = useState(false)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  const [msgHasMore, setMsgHasMore] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
+  const msgListRef = useRef<HTMLDivElement | null>(null)
+  const msgTopRef = useRef<HTMLDivElement | null>(null)
   const countRef = useRef(0)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   // SSE 长连里的回调闭包会捕获旧 state，故用 ref 持有"当前打开的会话"和"已加载会话 id 集合"
@@ -230,10 +256,49 @@ export default function LogsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 当前对话框收到新消息时自动滚到底部
+  // 当前对话框收到新消息时滚到底部。
+  // - 首次点进一个会话：瞬间跳转（behavior:'auto'），避免历史多时平滑动画从顶部慢慢滚到底；
+  // - 已打开的会话里追加新消息（末条 id 变化）：平滑滚动；
+  // - 上滚加载更早消息（前插，末条 id 不变）：不滚动，由 loadOlder 自行补偿滚动位置。
+  const scrolledChatRef = useRef<string | null>(null)
+  const lastMsgIdRef = useRef<number | null>(null)
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    if (!bottomRef.current) return
+    const isNewConv = scrolledChatRef.current !== selectedChat
+    const lastId = messages.length ? messages[messages.length - 1].id : null
+    const lastChanged = lastMsgIdRef.current !== lastId
+    scrolledChatRef.current = selectedChat
+    lastMsgIdRef.current = lastId
+    if (isNewConv) {
+      bottomRef.current.scrollIntoView({ behavior: 'auto' })
+    } else if (lastChanged) {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages, selectedChat])
+
+  // 向上滚到顶部哨兵时加载更早的消息，前插后补偿滚动高度差以保持视口位置不跳
+  const loadOlder = useCallback(async () => {
+    if (!selectedChat || loadingOlder || !msgHasMore) return
+    const oldest = messages[0]
+    if (!oldest) return
+    setLoadingOlder(true)
+    const el = msgListRef.current
+    const prevHeight = el ? el.scrollHeight : 0
+    try {
+      const data = await getMessages(selectedChat, { beforeId: oldest.id })
+      setMessages((cur) => {
+        const seen = new Set(cur.map((m) => m.id))
+        const older = (data.items as Message[]).filter((m) => !seen.has(m.id))
+        return [...older, ...cur]
+      })
+      setMsgHasMore(data.has_more)
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop += el.scrollHeight - prevHeight
+      })
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [selectedChat, loadingOlder, msgHasMore, messages])
 
   // 滚动到底部哨兵元素时自动加载下一页
   useEffect(() => {
@@ -251,11 +316,29 @@ export default function LogsPage() {
     return () => io.disconnect()
   }, [hasMore, loading, loadMore])
 
+  // 消息面板滚到顶部哨兵时加载更早消息
+  useEffect(() => {
+    const el = msgTopRef.current
+    if (!el) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && msgHasMore && !loadingOlder) {
+          loadOlder()
+        }
+      },
+      { root: msgListRef.current, threshold: 0.1 },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [msgHasMore, loadingOlder, loadOlder])
+
   const selectConversation = async (conv: Conversation) => {
     setSelectedChat(conv.chat_id)
     setSelectedConv(conv)
     setDraft('')
-    setMessages(await getMessages(conv.chat_id))
+    const data = await getMessages(conv.chat_id)
+    setMessages(data.items)
+    setMsgHasMore(data.has_more)
   }
 
   const ERR_MESSAGES: Record<string, string> = {
@@ -277,8 +360,10 @@ export default function LogsPage() {
         return
       }
       setDraft('')
-      // 刷新消息列表带出刚发的这条
-      setMessages(await getMessages(selectedChat))
+      // 刷新消息列表带出刚发的这条（回到最近一页）
+      const data = await getMessages(selectedChat)
+      setMessages(data.items)
+      setMsgHasMore(data.has_more)
     } catch {
       window.alert('发送失败，请检查服务状态')
     } finally {
@@ -406,9 +491,16 @@ export default function LogsPage() {
                 </p>
               </div>
             )}
-            <div className="flex-1 overflow-auto p-5 space-y-3">
+            <div ref={msgListRef} className="flex-1 overflow-auto p-5 space-y-3">
               {!selectedChat && (
                 <p className="text-dark-400 text-sm text-center pt-8">选择一个会话查看消息</p>
+              )}
+              {selectedChat && <div ref={msgTopRef} />}
+              {selectedChat && loadingOlder && (
+                <p className="text-dark-500 text-xs py-2 text-center">加载更早消息…</p>
+              )}
+              {selectedChat && !msgHasMore && messages.length > 0 && (
+                <p className="text-dark-600 text-xs py-2 text-center">— 已经到顶啦 —</p>
               )}
               {messages.map((m) => {
                 if (m.role === 'system') {
@@ -417,7 +509,7 @@ export default function LogsPage() {
                       <div className="px-3 py-1 rounded-full text-[11px] text-dark-400 bg-dark-800/60 border border-dark-700/50">
                         <span className="mr-1.5">{m.content}</span>
                         <span className="text-dark-500">
-                          {new Date(m.created_at).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                          {formatMsgTime(m.created_at)}
                         </span>
                       </div>
                     </div>
@@ -434,7 +526,7 @@ export default function LogsPage() {
                     >
                       <p className="whitespace-pre-wrap break-words">{m.content}</p>
                       <p className={`text-[10px] mt-1 ${m.role === 'assistant' ? 'text-white/60' : 'text-dark-500'}`}>
-                        {new Date(m.created_at).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        {formatMsgTime(m.created_at, true)}
                       </p>
                     </div>
                   </div>
