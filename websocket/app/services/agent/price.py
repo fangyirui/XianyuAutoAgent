@@ -1,5 +1,5 @@
 import time
-from typing import Optional
+from typing import Optional, List, Dict
 from loguru import logger
 from .base import BaseAgent, resolve_top_p
 from common.core import settings
@@ -10,7 +10,7 @@ class PriceAgent(BaseAgent):
         self,
         user_msg: str,
         item_desc: str,
-        context: str,
+        context: List[Dict],
         bargain_count: int = 0,
         item_custom_prompt: Optional[str] = None,
         chat_id: Optional[str] = None,
@@ -21,8 +21,7 @@ class PriceAgent(BaseAgent):
         messages[0]["content"] += f"\n▲当前议价轮次：{bargain_count}"
 
         logger.info(f"[PriceAgent] LLM请求 | model={settings.MODEL_NAME}, temp={dynamic_temp}, 议价轮次={bargain_count}")
-        logger.debug(f"[PriceAgent] 完整提示词:\n{messages[0]['content']}")
-        logger.debug(f"[PriceAgent] 用户输入: {messages[-1]['content']}")
+        logger.debug(f"[PriceAgent] 完整提示词:\n" + "\n".join(f"[{m['role']}] {m['content']}" for m in messages))
 
         kwargs = dict(
             model=settings.MODEL_NAME,

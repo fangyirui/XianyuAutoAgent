@@ -29,13 +29,13 @@ class BaseAgent:
         self,
         user_msg: str,
         item_desc: str,
-        context: str,
+        context: List[Dict],
         bargain_count: int = 0,
         item_custom_prompt: Optional[str] = None,
         chat_id: Optional[str] = None,
     ) -> str:
         messages = self._build_messages(user_msg, item_desc, context, item_custom_prompt)
-        logger.debug(f"[{self.__class__.__name__}] 构建消息完成，system_prompt长度={len(self.system_prompt)}, 商品额外提示词={'有' if item_custom_prompt else '无'}")
+        logger.debug(f"[{self.__class__.__name__}] 构建消息完成，system_prompt长度={len(self.system_prompt)}, 历史轮数={len(messages) - 2}, 商品额外提示词={'有' if item_custom_prompt else '无'}")
         response = await self._call_llm(messages, chat_id=chat_id)
         filtered = self.safety_filter(response)
         if filtered != response:
@@ -46,17 +46,37 @@ class BaseAgent:
         self,
         user_msg: str,
         item_desc: str,
-        context: str,
+        context: List[Dict],
         item_custom_prompt: Optional[str] = None,
     ) -> List[Dict]:
-        sys_content = f"【商品信息】{item_desc}\n【你与客户对话历史】{context}\n{self.system_prompt}"
-        # 严格门控：空串 / None / 任何 falsy 值都完全不追加，保证主流程零回归
+        sys_content = f"### 商品信息\n{item_desc}\n\n{self.system_prompt}"
+        # 严格门控：空串 / None / 任何 falsy 值都完全不追加
         if item_custom_prompt:
-            sys_content += f"\n【针对本商品的特别说明】{item_custom_prompt}"
-        return [
-            {"role": "system", "content": sys_content},
-            {"role": "user", "content": user_msg}
-        ]
+            sys_content += f"\n\n### 针对本商品的特别说明\n{item_custom_prompt}"
+
+        # 历史规整成严格交替的 user/assistant 轮次，杜绝"连续同角色/中间 system"被
+        # 严格网关（如部分版本的通义千问兼容接口）拒绝：
+        #   1) 买家可连发多条 -> 历史存多行连续 user；
+        #   2) 平台事件（[买家拍下了商品] 等）以 system 行落库，归到 user 侧（本就是买家侧动作）；
+        #   3) AI 回复里的分隔符占位符还原成换行。
+        # 连续同角色合并为一条（内容以换行拼接），当前买家消息并入末尾 user 轮次。
+        turns: List[Dict] = []
+
+        def _push(role: str, content: str):
+            if turns and turns[-1]["role"] == role:
+                turns[-1]["content"] += "\n" + content
+            else:
+                turns.append({"role": role, "content": content})
+
+        for m in context or []:
+            role = m.get("role")
+            if role not in ("user", "assistant", "system"):
+                continue
+            content = (m.get("content") or "").replace("{$分隔符}", "\n")
+            _push("assistant" if role == "assistant" else "user", content)
+        _push("user", user_msg)
+
+        return [{"role": "system", "content": sys_content}, *turns]
 
     async def _call_llm(
         self,
@@ -65,8 +85,7 @@ class BaseAgent:
         chat_id: Optional[str] = None,
     ) -> str:
         logger.info(f"[{self.__class__.__name__}] LLM请求 | model={settings.MODEL_NAME}, temp={temperature}")
-        logger.debug(f"[{self.__class__.__name__}] 完整提示词:\n{messages[0]['content']}")
-        logger.debug(f"[{self.__class__.__name__}] 用户输入: {messages[-1]['content']}")
+        logger.debug(f"[{self.__class__.__name__}] 完整提示词:\n" + "\n".join(f"[{m['role']}] {m['content']}" for m in messages))
         kwargs = dict(
             model=settings.MODEL_NAME,
             messages=messages,

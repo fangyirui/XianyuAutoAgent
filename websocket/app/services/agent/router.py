@@ -1,4 +1,5 @@
 import re
+from typing import List, Dict
 from loguru import logger
 
 
@@ -16,7 +17,7 @@ class IntentRouter:
         }
         self.classify_agent = classify_agent
 
-    async def detect(self, user_msg: str, item_desc: str, context: str, chat_id: str | None = None) -> str:
+    async def detect(self, user_msg: str, item_desc: str, context: List[Dict], chat_id: str | None = None) -> str:
         text_clean = re.sub(r"[^\w一-龥]", "", user_msg)
 
         if any(kw in text_clean for kw in self.rules["tech"]["keywords"]):

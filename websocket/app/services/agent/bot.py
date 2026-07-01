@@ -124,12 +124,6 @@ class XianyuReplyBot:
         blocked = ["微信", "QQ", "支付宝", "银行卡", "线下"]
         return "[安全提醒]请通过平台沟通" if any(p in text for p in blocked) else text
 
-    def format_history(self, context: List[Dict]) -> str:
-        # 包含 system 角色：用于让 AI 看到闲鱼平台事件（如 [买家拍下了商品]）。
-        # 历史 DB 中无 system 行，旧路径输出字节级不变。
-        msgs = [m for m in context if m["role"] in ("user", "assistant", "system")]
-        return "\n".join(f"{m['role']}: {m['content']}" for m in msgs)
-
     async def generate_reply(
         self,
         user_msg: str,
@@ -148,9 +142,9 @@ class XianyuReplyBot:
         logger.debug(f"[Bot] 商品信息: {item_desc}")
         logger.debug(f"[Bot] 上下文条数: {len(context)}, 商品额外提示词={'有' if item_custom_prompt else '无'}")
 
-        formatted_context = self.format_history(context)
+        # 历史对话作为原始列表直接下传，由 BaseAgent._build_messages 摊开成 API 原生多轮 messages。
         # IntentRouter / ClassifyAgent 不接收 item_custom_prompt（避免污染意图判断）
-        detected_intent = await self.router.detect(user_msg, item_desc, formatted_context, chat_id=chat_id)
+        detected_intent = await self.router.detect(user_msg, item_desc, context, chat_id=chat_id)
 
         if detected_intent == "no_reply":
             self.last_intent = "no_reply"
@@ -172,7 +166,7 @@ class XianyuReplyBot:
         reply = await agent.generate(
             user_msg=user_msg,
             item_desc=item_desc,
-            context=formatted_context,
+            context=context,
             bargain_count=bargain_count,
             item_custom_prompt=item_custom_prompt,
             chat_id=chat_id,

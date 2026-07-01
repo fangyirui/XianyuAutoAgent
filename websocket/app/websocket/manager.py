@@ -413,12 +413,17 @@ class XianyuLive:
             price_display = f"¥{mn}" if mn == mx else f"¥{mn} - ¥{mx}"
         else:
             price_display = f"¥{round(float(item_info.get('soldPrice', 0)), 2)}"
-        summary = {
-            "title": item_info.get("title", ""), "desc": item_info.get("desc", ""),
-            "price_range": price_display, "total_stock": item_info.get("quantity", 0),
-            "sku_details": clean_skus,
-        }
-        return json.dumps(summary, ensure_ascii=False)
+        lines = [
+            f"商品标题：{item_info.get('title', '')}",
+            f"商品描述：{item_info.get('desc', '')}",
+            f"商品价格：{price_display}",
+        ]
+        if clean_skus:
+            sku_text = "；".join(
+                f"{s['spec']}（{s['price']}元/库存{s['stock']}）" for s in clean_skus
+            )
+            lines.append(f"商品规格：{sku_text}")
+        return "\n".join(lines)
 
     async def handle_message(self, message_data: dict, ws):
         if not is_sync_package(message_data):
@@ -661,7 +666,7 @@ class XianyuLive:
                 return "retry"
 
         conv = await self._get_or_create_conversation(chat_id, send_user_id, item_id, sender_nickname)
-        item_desc = f"当前商品的信息如下：{self.build_item_description(item_info)}"
+        item_desc = self.build_item_description(item_info)
         item_custom_prompt = await self._get_item_custom_prompt(item_id)
 
         # 留痕 user 消息 —— 整批仅一次。重投（上次 AI 失败、未 commit）时复用同一批行，

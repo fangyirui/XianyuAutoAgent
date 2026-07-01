@@ -28,15 +28,22 @@ def check_build_messages_unchanged():
     agent.system_prompt = "SYS"
     agent.safety_filter = lambda x: x
 
-    msgs_none = agent._build_messages("hi", "ITEM", "CTX", None)
-    msgs_empty = agent._build_messages("hi", "ITEM", "CTX", "")
+    # 历史含 assistant，规整后严格交替：system -> user(prev) -> assistant -> user(hi)
+    history = [
+        {"role": "user", "content": "prev"},
+        {"role": "assistant", "content": "ack"},
+    ]
+    msgs_none = agent._build_messages("hi", "ITEM", history, None)
+    msgs_empty = agent._build_messages("hi", "ITEM", history, "")
     msgs_baseline = [
-        {"role": "system", "content": "【商品信息】ITEM\n【你与客户对话历史】CTX\nSYS"},
+        {"role": "system", "content": "### 商品信息\nITEM\n\nSYS"},
+        {"role": "user", "content": "prev"},
+        {"role": "assistant", "content": "ack"},
         {"role": "user", "content": "hi"},
     ]
     assert msgs_none == msgs_baseline, f"None 路径已发生变化: {msgs_none}"
     assert msgs_empty == msgs_baseline, f"空串路径已发生变化: {msgs_empty}"
-    print("[OK] _build_messages 在 None / 空串下与基线字节级一致")
+    print("[OK] _build_messages 在 None / 空串下与基线一致（原生多轮 messages，严格交替）")
 
 
 def check_signature_contains_chat_id():

@@ -1,5 +1,5 @@
 import time
-from typing import Optional
+from typing import Optional, List, Dict
 from loguru import logger
 from .base import BaseAgent, resolve_top_p
 from common.core import settings
@@ -10,7 +10,7 @@ class TechAgent(BaseAgent):
         self,
         user_msg: str,
         item_desc: str,
-        context: str,
+        context: List[Dict],
         bargain_count: int = 0,
         item_custom_prompt: Optional[str] = None,
         chat_id: Optional[str] = None,
@@ -18,8 +18,7 @@ class TechAgent(BaseAgent):
         messages = self._build_messages(user_msg, item_desc, context, item_custom_prompt)
 
         logger.info(f"[TechAgent] LLM请求 | model={settings.MODEL_NAME}, enable_search=True")
-        logger.debug(f"[TechAgent] 完整提示词:\n{messages[0]['content']}")
-        logger.debug(f"[TechAgent] 用户输入: {messages[-1]['content']}")
+        logger.debug(f"[TechAgent] 完整提示词:\n" + "\n".join(f"[{m['role']}] {m['content']}" for m in messages))
 
         kwargs = dict(
             model=settings.MODEL_NAME,
